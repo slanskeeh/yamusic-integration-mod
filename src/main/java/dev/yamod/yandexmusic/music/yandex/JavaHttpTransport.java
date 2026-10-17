@@ -74,7 +74,10 @@ public final class JavaHttpTransport implements HttpTransport {
                 .timeout(Duration.ofSeconds(15));
         request.headers().forEach(builder::header);
         if ("POST".equals(request.method())) {
-            builder.header("Content-Type", "application/x-www-form-urlencoded");
+            boolean hasType = request.headers().keySet().stream().anyMatch(name -> name.equalsIgnoreCase("Content-Type"));
+            if (!hasType) {
+                builder.header("Content-Type", "application/x-www-form-urlencoded");
+            }
             builder.POST(HttpRequest.BodyPublishers.ofString(request.body()));
         } else {
             builder.GET();

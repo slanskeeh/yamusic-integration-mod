@@ -21,6 +21,8 @@ public final class PcmAudioStream implements AudioStream {
     private final AtomicInteger bufferedBytes;
     private final AtomicInteger consumedBytes;
     private final AtomicBoolean finished;
+    private final AtomicInteger generation;
+    private final AtomicBoolean ended;
     private final AtomicBoolean closed = new AtomicBoolean();
     private byte[] pending = new byte[0];
     private int pendingOffset;
@@ -30,13 +32,17 @@ public final class PcmAudioStream implements AudioStream {
             BlockingQueue<byte[]> chunks,
             AtomicInteger bufferedBytes,
             AtomicInteger consumedBytes,
-            AtomicBoolean finished
+            AtomicBoolean finished,
+            AtomicInteger generation,
+            AtomicBoolean ended
     ) {
         this.format = format;
         this.chunks = chunks;
         this.bufferedBytes = bufferedBytes;
         this.consumedBytes = consumedBytes;
         this.finished = finished;
+        this.generation = generation;
+        this.ended = ended;
     }
 
     @Override
@@ -54,6 +60,7 @@ public final class PcmAudioStream implements AudioStream {
         ByteBuffer buffer = ByteBuffer.allocateDirect(wanted);
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(40);
         while (buffer.hasRemaining() && !closed.get()) {
+            dropIfSeeked();
             if (!fillPending()) {
                 if (finished.get() && chunks.isEmpty()) {
                     break;
@@ -78,13 +85,29 @@ public final class PcmAudioStream implements AudioStream {
             consumedBytes.addAndGet(count);
         }
         if (buffer.position() == 0) {
-            if (finished.get() || closed.get()) {
+            if (closed.get()) {
+                return null;
+            }
+            if (finished.get() && chunks.isEmpty() && pendingOffset >= pending.length) {
+                ended.set(true);
                 return null;
             }
             buffer.put(new byte[Math.min(wanted, frameSize * 64)]);
         }
         buffer.flip();
         return buffer;
+    }
+
+    private int appliedGeneration;
+
+    private void dropIfSeeked() {
+        int current = generation.get();
+        if (current == appliedGeneration) {
+            return;
+        }
+        pending = new byte[0];
+        pendingOffset = 0;
+        appliedGeneration = current;
     }
 
     private boolean fillPending() {

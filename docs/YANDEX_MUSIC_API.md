@@ -25,6 +25,17 @@
 
 Старый XML `download-info` и адрес `/get-mp3/` больше не используются для воспроизведения: такой ответ открывался, но не содержал кадров mp3.
 
+Для коллекции, по тем же исходникам MarshalX, добавлены:
+
+- `GET /search?text=&type=all&page=0` — треки, альбомы, исполнители и плейлисты первой страницы.
+- `GET /albums/{id}/with-tracks` — треки альбома.
+- `GET /artists/{id}/tracks?page=0&page-size=40` — треки исполнителя.
+- `GET /users/{uid}/playlists/list` и `GET /users/{uid}/playlists/{kind}` — плейлисты пользователя.
+- `POST /users/{uid}/likes/tracks/add-multiple` и `POST /users/{uid}/likes/tracks/remove` с полем `track-ids`. Успех — только если в `result` есть `revision`.
+- `POST /rotor/session/new` с JSON `{"seeds":["user:onyourwave"],"includeTracksInResponse":true}` и `POST /rotor/session/{id}/tracks` для следующей партии.
+
+Подкасты, клипы и изменение состава плейлиста не запрашиваются. В очередь ставится не больше 100 треков. Обложка берётся из `coverUri` или `ogImage`, `%%` заменяется на `200x200`, адрес остаётся https-доменом Яндекса.
+
 ## Зашифрованная доставка
 
 Новый метод `GET /get-file-info` умеет качества `lossless`, `hq`, `nq` и транспорт `raw` или `encraw`. Для `encraw` файл зашифрован, а открытые клиенты расшифровывают его AES-128-CTR ключом из ответа.

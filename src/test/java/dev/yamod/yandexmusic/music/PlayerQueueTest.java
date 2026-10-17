@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlayerQueueTest {
@@ -25,6 +27,57 @@ class PlayerQueueTest {
     void emptyQueueDoesNotInventATrack() {
         assertEquals(Optional.empty(), PlayerQueue.empty().current());
         assertEquals(Optional.empty(), PlayerQueue.empty().move(1));
+    }
+
+    @Test
+    void previousLeavesTheCurrentTrack() {
+        PlayerQueue queue = new PlayerQueue(List.of(track("1", "Первый"), track("2", "Второй")));
+        queue.nextTrack();
+        assertEquals("Первый", queue.previousTrack().orElseThrow().title());
+        assertTrue(queue.previousTrack().isEmpty());
+        assertEquals("Первый", queue.current().orElseThrow().title());
+    }
+
+    @Test
+    void shuffleKeepsCurrentThenPlaysSomethingElse() {
+        PlayerQueue queue = new PlayerQueue(List.of(
+                track("1", "Первый"),
+                track("2", "Второй"),
+                track("3", "Третий"),
+                track("4", "Четвёртый"),
+                track("5", "Пятый")
+        ), new Random(1));
+        queue.setShuffle(true);
+        assertEquals("1", queue.current().orElseThrow().id());
+        assertNotEquals("1", queue.nextTrack().orElseThrow().id());
+    }
+
+    @Test
+    void repeatTrackRestartsOnlyWhenTheSongEnds() {
+        PlayerQueue queue = new PlayerQueue(List.of(track("1", "Первый"), track("2", "Второй")));
+        queue.setRepeat(RepeatMode.TRACK);
+        assertEquals("1", queue.onFinished().orElseThrow().id());
+        assertEquals("1", queue.current().orElseThrow().id());
+        assertEquals("2", queue.nextTrack().orElseThrow().id());
+    }
+
+    @Test
+    void repeatQueueWrapsAndOffStops() {
+        PlayerQueue queue = new PlayerQueue(List.of(track("1", "Первый"), track("2", "Второй")));
+        queue.nextTrack();
+        assertTrue(queue.nextTrack().isEmpty());
+        assertEquals("2", queue.current().orElseThrow().id());
+        queue.setRepeat(RepeatMode.QUEUE);
+        assertEquals("1", queue.nextTrack().orElseThrow().id());
+        assertEquals("2", queue.previousTrack().orElseThrow().id());
+    }
+
+    @Test
+    void singleTrackPreviousDoesNotRestartIt() {
+        PlayerQueue queue = new PlayerQueue(List.of(track("1", "Первый")));
+        queue.setRepeat(RepeatMode.QUEUE);
+        assertTrue(queue.previousTrack().isEmpty());
+        assertEquals("1", queue.onFinished().orElseThrow().id());
     }
 
     @Test

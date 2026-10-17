@@ -1,12 +1,17 @@
 package dev.yamod.yandexmusic.music.yandex;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import dev.yamod.yandexmusic.music.MusicException;
 import dev.yamod.yandexmusic.music.Secrets;
 import dev.yamod.yandexmusic.music.TrackIds;
 import dev.yamod.yandexmusic.music.model.AccountSnapshot;
+import dev.yamod.yandexmusic.music.model.CatalogRef;
 import dev.yamod.yandexmusic.music.model.DownloadOption;
+import dev.yamod.yandexmusic.music.model.SearchPage;
 import dev.yamod.yandexmusic.music.model.TrackMetadata;
+import dev.yamod.yandexmusic.music.model.WavePage;
 
 import java.io.InputStream;
 import java.net.URI;
@@ -69,12 +74,101 @@ public final class YandexApiClient {
         if (trackIds == null || trackIds.isEmpty()) {
             return List.of();
         }
+        if (trackIds.size() <= 50) {
+            return tracksOnce(trackIds);
+        }
+        List<TrackMetadata> all = new java.util.ArrayList<>();
+        for (int offset = 0; offset < trackIds.size(); offset += 50) {
+            all.addAll(tracksOnce(trackIds.subList(offset, Math.min(trackIds.size(), offset + 50))));
+        }
+        return List.copyOf(all);
+    }
+
+    public List<TrackMetadata> playlistTracks(long uid, long kind) {
+        JsonElement result = playlist(uid, kind);
+        List<TrackMetadata> nested = YandexJson.playlistTracks(result);
+        if (!nested.isEmpty()) {
+            return nested;
+        }
+        return tracks(YandexJson.playlistTrackIds(result));
+    }
+
+    private List<TrackMetadata> tracksOnce(List<String> trackIds) {
         String joined = trackIds.stream()
                 .map(TrackIds::apiId)
                 .map(id -> URLEncoder.encode(id, StandardCharsets.UTF_8))
                 .collect(Collectors.joining(","));
         String body = "track-ids=" + joined + "&with-positions=true";
         return YandexJson.tracks(post("/tracks", body));
+    }
+
+    public SearchPage search(String text) {
+        String query = text == null ? "" : text.trim();
+        if (query.isEmpty() || query.length() > 120) {
+            throw new MusicException("Введите запрос короче 120 символов.");
+        }
+        String path = "/search?text=" + URLEncoder.encode(query, StandardCharsets.UTF_8)
+                + "&type=all&page=0&nocorrect=false&playlist-in-best=true";
+        return YandexJson.search(get(path));
+    }
+
+    public List<CatalogRef> playlists(long uid) {
+        requireUid(uid);
+        return YandexJson.playlistList(get("/users/" + uid + "/playlists/list"));
+    }
+
+    public JsonElement playlist(long uid, long kind) {
+        requireUid(uid);
+        requireKind(kind);
+        return get("/users/" + uid + "/playlists/" + kind);
+    }
+
+    public List<TrackMetadata> albumTracks(String albumId) {
+        String id = digits(albumId, "Идентификатор альбома отклонён.");
+        return YandexJson.albumTracks(get("/albums/" + id + "/with-tracks"));
+    }
+
+    public List<TrackMetadata> artistTracks(String artistId) {
+        String id = digits(artistId, "Идентификатор исполнителя отклонён.");
+        return YandexJson.artistTracks(get("/artists/" + id + "/tracks?page=0&page-size=40"));
+    }
+
+    public void likeTrack(long uid, String trackId, boolean remove) {
+        requireUid(uid);
+        String id = TrackIds.apiId(trackId);
+        String action = remove ? "remove" : "add-multiple";
+        String body = "track-ids=" + URLEncoder.encode(id, StandardCharsets.UTF_8);
+        JsonElement result = post("/users/" + uid + "/likes/tracks/" + action, body);
+        if (!YandexJson.likeConfirmed(result)) {
+            throw new MusicException(remove ? "Сервис не подтвердил снятие лайка." : "Сервис не подтвердил лайк.");
+        }
+    }
+
+    public WavePage myWave() {
+        JsonObject body = new JsonObject();
+        JsonArray seeds = new JsonArray();
+        seeds.add("user:onyourwave");
+        body.add("seeds", seeds);
+        body.addProperty("includeTracksInResponse", true);
+        return YandexJson.wave(postJson("/rotor/session/new", body.toString()));
+    }
+
+    public WavePage moreWave(String sessionId, List<String> queue) {
+        if (sessionId == null || !sessionId.matches("[A-Za-z0-9._:-]{1,80}") || sessionId.contains("..")) {
+            throw new MusicException("Идентификатор радиосессии отклонён.");
+        }
+        JsonObject body = new JsonObject();
+        JsonArray played = new JsonArray();
+        if (queue != null) {
+            for (String id : queue) {
+                if (TrackIds.looksLikeTrackId(id)) {
+                    played.add(TrackIds.apiId(id));
+                }
+            }
+        }
+        body.add("queue", played);
+        String path = "/rotor/session/" + URLEncoder.encode(sessionId, StandardCharsets.UTF_8) + "/tracks";
+        return YandexJson.wave(postJson(path, body.toString())).withSession(sessionId);
     }
 
     public List<DownloadOption> downloadInfo(String trackId) {
@@ -159,6 +253,37 @@ public final class YandexApiClient {
                 form
         ));
         return finish(response);
+    }
+
+    private JsonElement postJson(String path, String json) {
+        Map<String, String> headers = new HashMap<>(apiHeaders());
+        headers.put("Content-Type", "application/json");
+        HttpResponseData response = transport.exchange(new HttpRequestData(
+                "POST",
+                BASE_URL + path,
+                headers,
+                json
+        ));
+        return finish(response);
+    }
+
+    private static void requireUid(long uid) {
+        if (uid <= 0) {
+            throw new MusicException("Идентификатор аккаунта не получен.");
+        }
+    }
+
+    private static void requireKind(long kind) {
+        if (kind < 0) {
+            throw new MusicException("Идентификатор плейлиста отклонён.");
+        }
+    }
+
+    private static String digits(String raw, String message) {
+        if (raw == null || !raw.matches("[0-9]{1,20}")) {
+            throw new MusicException(message);
+        }
+        return raw;
     }
 
     private Map<String, String> apiHeaders() {

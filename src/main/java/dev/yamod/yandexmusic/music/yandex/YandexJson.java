@@ -6,8 +6,11 @@ import com.google.gson.JsonObject;
 import dev.yamod.yandexmusic.music.MusicException;
 import dev.yamod.yandexmusic.music.TrackIds;
 import dev.yamod.yandexmusic.music.model.AccountSnapshot;
+import dev.yamod.yandexmusic.music.model.CatalogRef;
 import dev.yamod.yandexmusic.music.model.DownloadOption;
+import dev.yamod.yandexmusic.music.model.SearchPage;
 import dev.yamod.yandexmusic.music.model.TrackMetadata;
+import dev.yamod.yandexmusic.music.model.WavePage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -93,7 +96,7 @@ public final class YandexJson {
         long duration = track.has("durationMs") && track.get("durationMs").isJsonPrimitive()
                 ? track.get("durationMs").getAsLong()
                 : 0L;
-        return new TrackMetadata(id, title, artistNames(track), available, duration);
+        return new TrackMetadata(id, title, artistNames(track), available, duration, coverOf(track));
     }
 
     public static List<DownloadOption> downloadOptions(JsonElement result) {
@@ -152,6 +155,198 @@ public final class YandexJson {
             throw new MusicException("Сервис не дал ссылку на mp3.");
         }
         return url;
+    }
+
+    public static SearchPage search(JsonElement result) {
+        if (result == null || !result.isJsonObject()) {
+            return new SearchPage(List.of(), List.of(), List.of(), List.of());
+        }
+        JsonObject root = result.getAsJsonObject();
+        return new SearchPage(
+                tracks(resultsOf(root, "tracks")),
+                catalog(resultsOf(root, "albums"), false),
+                catalog(resultsOf(root, "artists"), true),
+                playlists(resultsOf(root, "playlists"))
+        );
+    }
+
+    public static List<CatalogRef> playlistList(JsonElement result) {
+        return playlists(result);
+    }
+
+    public static List<TrackMetadata> playlistTracks(JsonElement result) {
+        JsonElement tracks = result != null && result.isJsonObject() ? result.getAsJsonObject().get("tracks") : result;
+        if (tracks == null || !tracks.isJsonArray()) {
+            return List.of();
+        }
+        List<TrackMetadata> parsed = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        for (JsonElement element : tracks.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            JsonObject nested = object(item, "track");
+            if (nested != null && TrackIds.looksLikeTrackId(string(nested, "id"))) {
+                parsed.add(fromTrack(nested));
+                continue;
+            }
+            String raw = string(item, "id");
+            if (TrackIds.looksLikeTrackId(raw)) {
+                missing.add(TrackIds.apiId(raw));
+            }
+        }
+        if (!missing.isEmpty() && parsed.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(parsed);
+    }
+
+    public static List<String> playlistTrackIds(JsonElement result) {
+        JsonElement tracks = result != null && result.isJsonObject() ? result.getAsJsonObject().get("tracks") : null;
+        if (tracks == null || !tracks.isJsonArray()) {
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>();
+        for (JsonElement element : tracks.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            JsonObject nested = object(item, "track");
+            String raw = nested == null ? string(item, "id") : string(nested, "id");
+            if (TrackIds.looksLikeTrackId(raw)) {
+                ids.add(TrackIds.apiId(raw));
+            }
+        }
+        return List.copyOf(ids);
+    }
+
+    public static List<TrackMetadata> albumTracks(JsonElement result) {
+        if (result == null || !result.isJsonObject() || !result.getAsJsonObject().has("volumes")) {
+            return List.of();
+        }
+        JsonElement volumes = result.getAsJsonObject().get("volumes");
+        if (!volumes.isJsonArray()) {
+            return List.of();
+        }
+        List<TrackMetadata> tracks = new ArrayList<>();
+        for (JsonElement volume : volumes.getAsJsonArray()) {
+            if (volume.isJsonArray()) {
+                tracks.addAll(tracks(volume));
+            } else if (volume.isJsonObject() && TrackIds.looksLikeTrackId(string(volume.getAsJsonObject(), "id"))) {
+                tracks.add(fromTrack(volume.getAsJsonObject()));
+            }
+        }
+        return List.copyOf(tracks);
+    }
+
+    public static List<TrackMetadata> artistTracks(JsonElement result) {
+        if (result != null && result.isJsonObject() && result.getAsJsonObject().has("tracks")) {
+            return tracks(result.getAsJsonObject().get("tracks"));
+        }
+        return tracks(result);
+    }
+
+    public static WavePage wave(JsonElement result) {
+        if (result == null || !result.isJsonObject()) {
+            throw new MusicException("Моя волна не вернула треки.");
+        }
+        JsonObject object = result.getAsJsonObject();
+        String sessionId = firstText(object, "radioSessionId", "radio_session_id");
+        boolean terminated = object.has("terminated")
+                && object.get("terminated").isJsonPrimitive()
+                && object.get("terminated").getAsBoolean();
+        List<TrackMetadata> tracks = new ArrayList<>();
+        if (object.has("sequence") && object.get("sequence").isJsonArray()) {
+            for (JsonElement element : object.getAsJsonArray("sequence")) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject nested = object(element.getAsJsonObject(), "track");
+                if (nested != null && TrackIds.looksLikeTrackId(string(nested, "id"))) {
+                    tracks.add(fromTrack(nested));
+                }
+            }
+        } else if (object.has("tracks")) {
+            tracks.addAll(tracks(object.get("tracks")));
+        }
+        return new WavePage(sessionId, tracks, terminated);
+    }
+
+    public static boolean likeConfirmed(JsonElement result) {
+        return result != null && result.isJsonObject() && result.getAsJsonObject().has("revision");
+    }
+
+    private static JsonElement resultsOf(JsonObject root, String field) {
+        JsonObject bucket = object(root, field);
+        if (bucket != null && bucket.has("results")) {
+            return bucket.get("results");
+        }
+        return root.get(field);
+    }
+
+    private static List<CatalogRef> catalog(JsonElement result, boolean artist) {
+        if (result == null || !result.isJsonArray()) {
+            return List.of();
+        }
+        List<CatalogRef> refs = new ArrayList<>();
+        for (JsonElement element : result.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            String id = string(item, "id");
+            if (!id.matches("[0-9]{1,20}")) {
+                continue;
+            }
+            String title = artist ? string(item, "name") : string(item, "title");
+            String subtitle = artist ? "" : artistNames(item);
+            refs.add(new CatalogRef(id, "", title, subtitle));
+        }
+        return List.copyOf(refs);
+    }
+
+    private static List<CatalogRef> playlists(JsonElement result) {
+        if (result == null || !result.isJsonArray()) {
+            return List.of();
+        }
+        List<CatalogRef> refs = new ArrayList<>();
+        for (JsonElement element : result.getAsJsonArray()) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            String kind = string(item, "kind");
+            if (!kind.matches("[0-9]{1,20}")) {
+                continue;
+            }
+            String owner = string(item, "uid");
+            if (owner.isEmpty()) {
+                JsonObject ownerObject = object(item, "owner");
+                owner = ownerObject == null ? "" : string(ownerObject, "uid");
+            }
+            if (!owner.matches("[0-9]{1,20}")) {
+                continue;
+            }
+            refs.add(new CatalogRef(kind, owner, string(item, "title"), ""));
+        }
+        return List.copyOf(refs);
+    }
+
+    private static String coverOf(JsonObject track) {
+        String cover = firstText(track, "coverUri", "ogImage");
+        if (!cover.isEmpty()) {
+            return cover;
+        }
+        if (!track.has("albums") || !track.get("albums").isJsonArray() || track.getAsJsonArray("albums").isEmpty()) {
+            return "";
+        }
+        JsonElement album = track.getAsJsonArray("albums").get(0);
+        if (!album.isJsonObject()) {
+            return "";
+        }
+        return string(album.getAsJsonObject(), "coverUri");
     }
 
     private static String artistNames(JsonObject track) {

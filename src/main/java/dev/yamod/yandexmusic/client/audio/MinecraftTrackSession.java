@@ -27,8 +27,13 @@ public final class MinecraftTrackSession implements AudioSession {
     private final AtomicInteger consumedBytes = new AtomicInteger();
     private final AtomicInteger decodedFrames = new AtomicInteger();
     private final AtomicBoolean finished = new AtomicBoolean();
+    private final AtomicInteger seekGeneration = new AtomicInteger();
+    private final AtomicInteger streamGeneration = new AtomicInteger();
+    private final AtomicBoolean ended = new AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicLong skipBytes = new java.util.concurrent.atomic.AtomicLong();
     private final OpenAlPlayback playback = new OpenAlPlayback();
     private volatile AudioFormat format;
+    private volatile byte[] audio = new byte[0];
     private volatile String error = "";
     private volatile boolean stopRequested;
     private volatile ExternalMp3Decoder external;
@@ -51,7 +56,15 @@ public final class MinecraftTrackSession implements AudioSession {
         decoder.start();
         try {
             waitForAudio();
-            playback.start(new PcmAudioStream(format, chunks, bufferedBytes, consumedBytes, finished));
+            playback.start(new PcmAudioStream(
+                    format,
+                    chunks,
+                    bufferedBytes,
+                    consumedBytes,
+                    finished,
+                    streamGeneration,
+                    ended
+            ));
             YandexMusicMod.LOGGER.info(
                     "Yandex track attached to Minecraft audio: {} Hz, {} ch",
                     (int) format.getSampleRate(),
@@ -82,6 +95,28 @@ public final class MinecraftTrackSession implements AudioSession {
     }
 
     @Override
+    public void seek(long millis) {
+        AudioFormat current = format;
+        if (current == null || audio.length == 0 || stopRequested) {
+            return;
+        }
+        int frame = Math.max(1, current.getFrameSize());
+        long frames = (long) (Math.max(0, millis) / 1000.0 * current.getSampleRate());
+        long bytes = frames * frame;
+        skipBytes.set(bytes);
+        consumedBytes.set(bytes > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) bytes);
+        bufferedBytes.set(0);
+        ended.set(false);
+        chunks.clear();
+        streamGeneration.incrementAndGet();
+        seekGeneration.incrementAndGet();
+        ExternalMp3Decoder currentDecoder = external;
+        if (currentDecoder != null) {
+            currentDecoder.close();
+        }
+    }
+
+    @Override
     public void pause() {
         playback.pause();
     }
@@ -99,6 +134,11 @@ public final class MinecraftTrackSession implements AudioSession {
     @Override
     public String errorMessage() {
         return error.isEmpty() ? playback.errorMessage() : error;
+    }
+
+    @Override
+    public boolean naturallyEnded() {
+        return ended.get() && !stopRequested;
     }
 
     @Override
@@ -160,6 +200,7 @@ public final class MinecraftTrackSession implements AudioSession {
         ExternalMp3Decoder decoder = null;
         try {
             byte[] data = input.readAllBytes();
+            audio = data;
             int preview = Math.min(4, data.length);
             byte[] magic = new byte[preview];
             System.arraycopy(data, 0, magic, 0, preview);
@@ -167,43 +208,39 @@ public final class MinecraftTrackSession implements AudioSession {
             if (!Mp3Probe.looksLikeMp3(magic)) {
                 throw new AudioException(Mp3Probe.describe(magic));
             }
-            decoder = ExternalMp3Decoder.start(data);
-            external = decoder;
-            if (stopRequested) {
-                return;
-            }
-            format = decoder.readFormat();
-            YandexMusicMod.LOGGER.info(
-                    "Yandex external decoder format: {} Hz, {} ch",
-                    (int) format.getSampleRate(),
-                    format.getChannels()
-            );
-            byte[] buffer = new byte[8192];
-            byte[] pending = new byte[1];
-            boolean hasPending = false;
             while (!stopRequested) {
-                int count = decoder.read(buffer);
-                if (count < 0) {
+                int generation = seekGeneration.get();
+                long skip = skipBytes.get();
+                boolean restart = false;
+                decoder = ExternalMp3Decoder.start(data);
+                external = decoder;
+                try {
+                    AudioFormat decoded = decoder.readFormat();
+                    if (format == null) {
+                        format = decoded;
+                    }
+                    YandexMusicMod.LOGGER.info(
+                            "Yandex external decoder format: {} Hz, {} ch",
+                            (int) decoded.getSampleRate(),
+                            decoded.getChannels()
+                    );
+                    restart = pump(decoder, generation, skip);
+                } catch (Exception exception) {
+                    restart = !stopRequested && seekGeneration.get() != generation;
+                    if (!restart) {
+                        throw exception;
+                    }
+                } finally {
+                    decoder.close();
+                    if (external == decoder) {
+                        external = null;
+                    }
+                    decoder = null;
+                }
+                if (!restart) {
                     break;
                 }
-                if (count == 0) {
-                    continue;
-                }
-                int offset = 0;
-                if (hasPending) {
-                    byte[] first = new byte[] {pending[0], buffer[0]};
-                    offer(first);
-                    offset = 1;
-                    hasPending = false;
-                }
-                int even = offset + ((count - offset) & ~1);
-                if (even > offset) {
-                    offer(java.util.Arrays.copyOfRange(buffer, offset, even));
-                }
-                if (even < count) {
-                    pending[0] = buffer[count - 1];
-                    hasPending = true;
-                }
+                chunks.clear();
             }
             if (decodedFrames.get() == 0 && !stopRequested) {
                 throw new AudioException("Внешний декодер не вернул звук из файла на " + data.length + " байт.");
@@ -230,12 +267,70 @@ public final class MinecraftTrackSession implements AudioSession {
         }
     }
 
-    private void offer(byte[] pcm) throws InterruptedException {
-        bufferedBytes.addAndGet(pcm.length);
-        decodedFrames.incrementAndGet();
-        while (!stopRequested && !chunks.offer(pcm, 100, TimeUnit.MILLISECONDS)) {
+    private boolean pump(ExternalMp3Decoder decoder, int generation, long skip) throws Exception {
+        byte[] buffer = new byte[8192];
+        byte[] pending = new byte[1];
+        boolean hasPending = false;
+        long discarded = 0;
+        while (!stopRequested && seekGeneration.get() == generation) {
+            int count = decoder.read(buffer);
+            if (count < 0) {
+                break;
+            }
+            if (count == 0) {
+                continue;
+            }
+            int offset = 0;
+            if (hasPending) {
+                discarded = take(new byte[] {pending[0], buffer[0]}, skip, discarded, generation);
+                offset = 1;
+                hasPending = false;
+            }
+            int even = offset + ((count - offset) & ~1);
+            if (even > offset) {
+                discarded = take(java.util.Arrays.copyOfRange(buffer, offset, even), skip, discarded, generation);
+            }
+            if (even < count) {
+                pending[0] = buffer[count - 1];
+                hasPending = true;
+            }
+        }
+        return seekGeneration.get() != generation;
+    }
+
+    private long take(byte[] pcm, long skip, long discarded, int generation) throws InterruptedException {
+        if (pcm.length == 0 || seekGeneration.get() != generation) {
+            return discarded;
+        }
+        if (discarded < skip) {
+            long need = skip - discarded;
+            if (pcm.length <= need) {
+                return discarded + pcm.length;
+            }
+            int drop = (int) need;
+            int frame = format == null ? 2 : Math.max(1, format.getFrameSize());
+            drop -= drop % frame;
+            if (drop >= pcm.length) {
+                return discarded + pcm.length;
+            }
+            pcm = java.util.Arrays.copyOfRange(pcm, drop, pcm.length - ((pcm.length - drop) % frame));
+            discarded = skip;
+        }
+        if (pcm.length > 0 && seekGeneration.get() == generation) {
+            offer(pcm, generation);
+        }
+        return discarded;
+    }
+
+    private void offer(byte[] pcm, int generation) throws InterruptedException {
+        while (!stopRequested && seekGeneration.get() == generation && !chunks.offer(pcm, 100, TimeUnit.MILLISECONDS)) {
             // Очередь полна: пауза или звуковой движок ещё не забрал данные.
         }
+        if (seekGeneration.get() != generation) {
+            return;
+        }
+        bufferedBytes.addAndGet(pcm.length);
+        decodedFrames.incrementAndGet();
     }
 
     private static String hex(byte[] bytes) {

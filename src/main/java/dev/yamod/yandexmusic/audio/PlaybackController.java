@@ -62,6 +62,16 @@ public final class PlaybackController {
         }
     }
 
+    public synchronized void seek(long millis) {
+        if (session != null) {
+            session.seek(millis);
+        }
+    }
+
+    public synchronized boolean naturallyEnded() {
+        return session != null && session.naturallyEnded();
+    }
+
     public synchronized void release() {
         if (session != null) {
             session.close();

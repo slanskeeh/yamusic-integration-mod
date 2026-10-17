@@ -15,6 +15,13 @@ public interface AudioSession extends AutoCloseable {
         return 0;
     }
 
+    default void seek(long millis) {
+    }
+
+    default boolean naturallyEnded() {
+        return false;
+    }
+
     default void setVolume(float volume) {
     }
 

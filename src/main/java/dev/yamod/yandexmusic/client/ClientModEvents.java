@@ -37,6 +37,7 @@ public final class ClientModEvents {
             }
             Minecraft minecraft = Minecraft.getInstance();
             GameMusic.tick();
+            NowPlaying.tick();
             while (PrototypeKeyMappings.OPEN_PROTOTYPE.consumeClick()) {
                 if (minecraft.screen == null) {
                     minecraft.setScreen(new PrototypeScreen());
