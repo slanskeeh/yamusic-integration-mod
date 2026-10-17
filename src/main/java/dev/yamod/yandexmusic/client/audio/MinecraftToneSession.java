@@ -21,6 +21,11 @@ public final class MinecraftToneSession implements AudioSession {
     }
 
     @Override
+    public void setVolume(float volume) {
+        playback.setVolume(volume);
+    }
+
+    @Override
     public void pause() {
         playback.pause();
     }

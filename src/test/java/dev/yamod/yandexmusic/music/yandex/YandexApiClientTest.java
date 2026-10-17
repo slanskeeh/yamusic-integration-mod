@@ -69,6 +69,69 @@ class YandexApiClientTest {
     }
 
     @Test
+    void likedTracksKeepOrderAndStopAtTheEndOfThePage() {
+        FakeTransport transport = new FakeTransport();
+        transport.onExchange = request -> {
+            if (request.url().endsWith("/account/status")) {
+                return new HttpResponseData(200, """
+                        {"result":{"account":{"uid":7,"login":"listener"}}}
+                        """);
+            }
+            if (request.url().contains("/likes/tracks")) {
+                return new HttpResponseData(200, """
+                        {"result":{"library":{"tracks":[{"id":"10:1"},{"id":"20:2"}]}}}
+                        """);
+            }
+            if (request.url().endsWith("/tracks")) {
+                assertTrue(request.body().contains("10"));
+                assertTrue(request.body().contains("20"));
+                return new HttpResponseData(200, """
+                        {"result":[
+                          {"id":"10","title":"Первый","durationMs":1000,"artists":[{"name":"А"}]},
+                          {"id":"20","title":"Второй","durationMs":2000,"artists":[{"name":"Б"}]}
+                        ]}
+                        """);
+            }
+            return new HttpResponseData(404, "{\"error\":{\"name\":\"not-found\"}}");
+        };
+        var tracks = new YandexMusicProvider(new YandexApiClient(transport, TOKEN)).likedTracks();
+        assertEquals(2, tracks.size());
+        assertEquals("Первый", tracks.get(0).title());
+        assertEquals("Второй", tracks.get(1).title());
+    }
+
+    @Test
+    void likedListSkipsIdsThatAreNotTracks() {
+        FakeTransport transport = new FakeTransport();
+        transport.onExchange = request -> {
+            if (request.url().endsWith("/account/status")) {
+                return new HttpResponseData(200, """
+                        {"result":{"account":{"uid":7,"login":"listener"}}}
+                        """);
+            }
+            if (request.url().contains("/likes/tracks")) {
+                return new HttpResponseData(200, """
+                        {"result":{"library":{"tracks":[
+                          {"id":"6f1c8a40-1111-2222-3333-abcdefabcdef"},
+                          {"id":"37699623:4532"}
+                        ]}}}
+                        """);
+            }
+            if (request.url().endsWith("/tracks")) {
+                assertFalse(request.body().contains("6f1c8a40"));
+                assertTrue(request.body().contains("37699623"));
+                return new HttpResponseData(200, """
+                        {"result":[{"id":"37699623","title":"Песня","artists":[{"name":"Исполнитель"}]}]}
+                        """);
+            }
+            return new HttpResponseData(404, "{\"error\":{\"name\":\"not-found\"}}");
+        };
+        var tracks = new YandexMusicProvider(new YandexApiClient(transport, TOKEN)).likedTracks();
+        assertEquals(1, tracks.size());
+        assertEquals("37699623", tracks.get(0).id());
+    }
+
+    @Test
     void guestStatusWithoutUidIsRejected() {
         FakeTransport transport = new FakeTransport();
         transport.onExchange = request -> new HttpResponseData(200, """

@@ -52,6 +52,16 @@ public final class PlaybackController {
         }
     }
 
+    public synchronized long positionMillis() {
+        return session == null ? 0 : session.positionMillis();
+    }
+
+    public synchronized void setVolume(float volume) {
+        if (session != null) {
+            session.setVolume(volume);
+        }
+    }
+
     public synchronized void release() {
         if (session != null) {
             session.close();

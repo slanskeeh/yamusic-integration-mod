@@ -6,7 +6,6 @@ import dev.yamod.yandexmusic.audio.PlaybackState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.sounds.AudioStream;
 import net.minecraft.client.sounds.ChannelAccess;
-import net.minecraft.sounds.SoundSource;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +19,7 @@ public final class OpenAlPlayback {
     private AudioStream stream;
     private PlaybackState state = PlaybackState.IDLE;
     private String error = "";
+    private float volume = 1.0F;
 
     public synchronized void start(AudioStream audioStream) {
         if (state != PlaybackState.IDLE) {
@@ -39,10 +39,6 @@ public final class OpenAlPlayback {
         if (created == null) {
             throw fail("Свободного звукового канала Minecraft нет.");
         }
-        float volume = minecraft.options.getSoundSourceVolume(SoundSource.MASTER);
-        if (volume < 0.2F) {
-            volume = 1.0F;
-        }
         float appliedVolume = volume;
         created.execute(channel -> {
             channel.disableAttenuation();
@@ -54,6 +50,13 @@ public final class OpenAlPlayback {
         this.handle = created;
         this.stream = audioStream;
         this.state = PlaybackState.PLAYING;
+    }
+
+    public synchronized void setVolume(float level) {
+        volume = level;
+        if (handle != null && (state == PlaybackState.PLAYING || state == PlaybackState.PAUSED)) {
+            handle.execute(channel -> channel.setVolume(level));
+        }
     }
 
     public synchronized void pause() {

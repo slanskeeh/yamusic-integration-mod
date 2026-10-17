@@ -8,8 +8,12 @@ public final class TrackIds {
     private TrackIds() {
     }
 
+    public static boolean looksLikeTrackId(String raw) {
+        return raw != null && raw.matches("[0-9]{1,20}(:[0-9]{1,20})?");
+    }
+
     public static String apiId(String raw) {
-        if (raw == null || !raw.matches("[0-9]{1,20}(:[0-9]{1,20})?")) {
+        if (!looksLikeTrackId(raw)) {
             throw new MusicException("Идентификатор трека имеет неожиданный вид и был отклонён.");
         }
         int colon = raw.indexOf(':');

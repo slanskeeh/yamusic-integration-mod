@@ -19,15 +19,23 @@ public final class PcmAudioStream implements AudioStream {
     private final AudioFormat format;
     private final BlockingQueue<byte[]> chunks;
     private final AtomicInteger bufferedBytes;
+    private final AtomicInteger consumedBytes;
     private final AtomicBoolean finished;
     private final AtomicBoolean closed = new AtomicBoolean();
     private byte[] pending = new byte[0];
     private int pendingOffset;
 
-    public PcmAudioStream(AudioFormat format, BlockingQueue<byte[]> chunks, AtomicInteger bufferedBytes, AtomicBoolean finished) {
+    public PcmAudioStream(
+            AudioFormat format,
+            BlockingQueue<byte[]> chunks,
+            AtomicInteger bufferedBytes,
+            AtomicInteger consumedBytes,
+            AtomicBoolean finished
+    ) {
         this.format = format;
         this.chunks = chunks;
         this.bufferedBytes = bufferedBytes;
+        this.consumedBytes = consumedBytes;
         this.finished = finished;
     }
 
@@ -67,6 +75,7 @@ public final class PcmAudioStream implements AudioStream {
             buffer.put(pending, pendingOffset, count);
             pendingOffset += count;
             bufferedBytes.addAndGet(-count);
+            consumedBytes.addAndGet(count);
         }
         if (buffer.position() == 0) {
             if (finished.get() || closed.get()) {

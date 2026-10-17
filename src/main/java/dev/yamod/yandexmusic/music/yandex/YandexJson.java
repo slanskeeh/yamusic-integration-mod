@@ -32,22 +32,28 @@ public final class YandexJson {
     }
 
     public static Optional<String> firstLikedTrackId(JsonElement result) {
+        return likedTrackIds(result).stream().findFirst();
+    }
+
+    public static List<String> likedTrackIds(JsonElement result) {
         if (result == null || !result.isJsonObject()) {
-            return Optional.empty();
+            return List.of();
         }
         JsonObject library = object(result.getAsJsonObject(), "library");
         if (library == null || !library.has("tracks") || !library.get("tracks").isJsonArray()) {
-            return Optional.empty();
+            return List.of();
         }
-        JsonArray tracks = library.getAsJsonArray("tracks");
-        if (tracks.isEmpty() || !tracks.get(0).isJsonObject()) {
-            return Optional.empty();
+        List<String> ids = new ArrayList<>();
+        for (JsonElement element : library.getAsJsonArray("tracks")) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            String raw = string(element.getAsJsonObject(), "id");
+            if (TrackIds.looksLikeTrackId(raw)) {
+                ids.add(TrackIds.apiId(raw));
+            }
         }
-        String raw = string(tracks.get(0).getAsJsonObject(), "id");
-        if (raw.isEmpty()) {
-            return Optional.empty();
-        }
-        return Optional.of(TrackIds.apiId(raw));
+        return List.copyOf(ids);
     }
 
     public static TrackMetadata track(JsonElement result) {
@@ -55,6 +61,30 @@ public final class YandexJson {
         if (track == null) {
             throw new MusicException("API не вернуло метаданные трека.");
         }
+        return fromTrack(track);
+    }
+
+    public static List<TrackMetadata> tracks(JsonElement result) {
+        if (result == null || result.isJsonNull()) {
+            return List.of();
+        }
+        if (result.isJsonObject()) {
+            return List.of(fromTrack(result.getAsJsonObject()));
+        }
+        if (!result.isJsonArray()) {
+            throw new MusicException("Ответ со списком треков имеет неожиданный вид.");
+        }
+        List<TrackMetadata> tracks = new ArrayList<>();
+        for (JsonElement element : result.getAsJsonArray()) {
+            JsonObject track = firstObject(element);
+            if (track != null && TrackIds.looksLikeTrackId(string(track, "id"))) {
+                tracks.add(fromTrack(track));
+            }
+        }
+        return List.copyOf(tracks);
+    }
+
+    private static TrackMetadata fromTrack(JsonObject track) {
         String id = TrackIds.apiId(string(track, "id"));
         String title = string(track, "title");
         Boolean available = track.has("available") && track.get("available").isJsonPrimitive()

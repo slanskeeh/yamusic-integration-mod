@@ -24,6 +24,7 @@ public final class MinecraftTrackSession implements AudioSession {
     private final InputStream input;
     private final BlockingQueue<byte[]> chunks = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
     private final AtomicInteger bufferedBytes = new AtomicInteger();
+    private final AtomicInteger consumedBytes = new AtomicInteger();
     private final AtomicInteger decodedFrames = new AtomicInteger();
     private final AtomicBoolean finished = new AtomicBoolean();
     private final OpenAlPlayback playback = new OpenAlPlayback();
@@ -50,7 +51,7 @@ public final class MinecraftTrackSession implements AudioSession {
         decoder.start();
         try {
             waitForAudio();
-            playback.start(new PcmAudioStream(format, chunks, bufferedBytes, finished));
+            playback.start(new PcmAudioStream(format, chunks, bufferedBytes, consumedBytes, finished));
             YandexMusicMod.LOGGER.info(
                     "Yandex track attached to Minecraft audio: {} Hz, {} ch",
                     (int) format.getSampleRate(),
@@ -63,6 +64,21 @@ public final class MinecraftTrackSession implements AudioSession {
             close();
             throw exception;
         }
+    }
+
+    @Override
+    public long positionMillis() {
+        javax.sound.sampled.AudioFormat current = format;
+        if (current == null || current.getSampleRate() <= 0 || current.getFrameSize() <= 0) {
+            return 0;
+        }
+        double frames = consumedBytes.get() / (double) current.getFrameSize();
+        return (long) (frames / current.getSampleRate() * 1000.0);
+    }
+
+    @Override
+    public void setVolume(float volume) {
+        playback.setVolume(volume);
     }
 
     @Override

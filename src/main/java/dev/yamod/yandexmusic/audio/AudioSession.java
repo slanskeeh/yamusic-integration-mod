@@ -11,6 +11,13 @@ public interface AudioSession extends AutoCloseable {
 
     String errorMessage();
 
+    default long positionMillis() {
+        return 0;
+    }
+
+    default void setVolume(float volume) {
+    }
+
     @Override
     void close();
 }

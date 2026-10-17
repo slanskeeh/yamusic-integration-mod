@@ -7,6 +7,7 @@ import dev.yamod.yandexmusic.music.model.StreamDecision;
 import dev.yamod.yandexmusic.music.model.TrackMetadata;
 
 import java.io.InputStream;
+import java.util.List;
 
 /**
  * Первая реализация провайдера. Умеет только то, что нужно для проверки фазы 1.
@@ -26,12 +27,29 @@ public final class YandexMusicProvider {
         return client.accountStatus();
     }
 
+    public static final int LIKED_TRACK_LIMIT = 30;
+
     public TrackMetadata firstLikedTrack() {
+        List<TrackMetadata> tracks = likedTracks();
+        return tracks.get(0);
+    }
+
+    public List<TrackMetadata> likedTracks() {
         AccountSnapshot account = account();
-        String trackId = client.firstLikedTrackId(account.uid()).orElseThrow(() -> new MusicException(
-                "В любимых треках пусто. Для этой проверки нужен хотя бы один любимый трек; каталог целиком ещё не делается."
-        ));
-        return client.track(trackId);
+        List<String> ids = client.likedTrackIds(account.uid());
+        if (ids.isEmpty()) {
+            throw new MusicException(
+                    "В любимых треках пусто. Для плеера нужен хотя бы один любимый трек; каталог целиком ещё не делается."
+            );
+        }
+        if (ids.size() > LIKED_TRACK_LIMIT) {
+            ids = ids.subList(0, LIKED_TRACK_LIMIT);
+        }
+        List<TrackMetadata> tracks = client.tracks(ids);
+        if (tracks.isEmpty()) {
+            throw new MusicException("Сервис не вернул метаданные любимых треков.");
+        }
+        return tracks;
     }
 
     public StreamDecision availability(String trackId) {

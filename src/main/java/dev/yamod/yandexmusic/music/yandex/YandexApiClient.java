@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Минимальный клиент неофициального API: статус аккаунта, один трек и старый download-info.
@@ -46,16 +47,34 @@ public final class YandexApiClient {
     }
 
     public Optional<String> firstLikedTrackId(long uid) {
+        return likedTrackIds(uid).stream().findFirst();
+    }
+
+    public List<String> likedTrackIds(long uid) {
         if (uid <= 0) {
             throw new MusicException("Идентификатор аккаунта не получен.");
         }
-        return YandexJson.firstLikedTrackId(get("/users/" + uid + "/likes/tracks?if-modified-since-revision=0"));
+        return YandexJson.likedTrackIds(get("/users/" + uid + "/likes/tracks?if-modified-since-revision=0"));
     }
 
     public TrackMetadata track(String trackId) {
-        String id = TrackIds.apiId(trackId);
-        String body = "track-ids=" + URLEncoder.encode(id, StandardCharsets.UTF_8) + "&with-positions=true";
-        return YandexJson.track(post("/tracks", body));
+        List<TrackMetadata> tracks = tracks(List.of(trackId));
+        if (tracks.isEmpty()) {
+            throw new MusicException("API не вернуло метаданные трека.");
+        }
+        return tracks.get(0);
+    }
+
+    public List<TrackMetadata> tracks(List<String> trackIds) {
+        if (trackIds == null || trackIds.isEmpty()) {
+            return List.of();
+        }
+        String joined = trackIds.stream()
+                .map(TrackIds::apiId)
+                .map(id -> URLEncoder.encode(id, StandardCharsets.UTF_8))
+                .collect(Collectors.joining(","));
+        String body = "track-ids=" + joined + "&with-positions=true";
+        return YandexJson.tracks(post("/tracks", body));
     }
 
     public List<DownloadOption> downloadInfo(String trackId) {
