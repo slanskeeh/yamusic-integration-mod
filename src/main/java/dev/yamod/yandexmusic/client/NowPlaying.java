@@ -26,6 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class NowPlaying {
     private static volatile PlayerQueue queue = PlayerQueue.empty();
     private static volatile List<TrackMetadata> listed = List.of();
+    private static volatile List<TrackMetadata> likes = List.of();
+    private static volatile List<TrackMetadata> waveTracks = List.of();
     private static final Set<String> likedIds = Collections.synchronizedSet(new HashSet<>());
     private static volatile String waveSession = "";
     private static volatile boolean wave;
@@ -49,6 +51,50 @@ public final class NowPlaying {
             endHandled = true;
             onEnded();
         }
+    }
+
+    public static List<TrackMetadata> likes() {
+        return likes;
+    }
+
+    public static List<TrackMetadata> listedTracks() {
+        return listed;
+    }
+
+    public static List<TrackMetadata> waveTracks() {
+        return waveTracks;
+    }
+
+    public static boolean currentLiked() {
+        TrackMetadata track = track();
+        return track != null && likedIds.contains(track.id());
+    }
+
+    public static boolean shuffled() {
+        return queue.shuffled();
+    }
+
+    public static RepeatMode repeat() {
+        return queue.repeat();
+    }
+
+    public static long positionMillis() {
+        return PrototypeAudio.controller().positionMillis();
+    }
+
+    public static long durationMillis() {
+        TrackMetadata track = track();
+        return track == null ? 0 : track.durationMs();
+    }
+
+    public static void setVolume(float level) {
+        PersonalVolume.set(level);
+        PrototypeAudio.controller().setVolume(PersonalVolume.get());
+    }
+
+    public static void playAt(List<TrackMetadata> tracks, int index, boolean keepWave) {
+        List<TrackMetadata> copy = tracks == null ? List.of() : List.copyOf(tracks);
+        run("Трек", () -> playTracks(copy, index, keepWave && wave, keepWave ? waveSession : ""));
     }
 
     public static TrackMetadata track() {
@@ -199,6 +245,7 @@ public final class NowPlaying {
         run("Моя волна", () -> {
             WavePage page = provider().myWave();
             listed = page.tracks();
+            waveTracks = listed;
             LibraryView.show("Моя волна", trackRows(page.tracks()));
             return playTracks(page.tracks(), 0, true, page.sessionId())
                     + " Повтор очереди зациклит уже загруженную партию.";
@@ -208,7 +255,8 @@ public final class NowPlaying {
     public static void showLikes() {
         run("Любимые", () -> {
             List<TrackMetadata> tracks = provider().likedTracks();
-            listed = List.copyOf(tracks);
+            likes = List.copyOf(tracks);
+            listed = likes;
             likedIds.clear();
             for (TrackMetadata track : tracks) {
                 likedIds.add(track.id());
@@ -324,6 +372,9 @@ public final class NowPlaying {
             return Optional.empty();
         }
         queue.append(page.tracks());
+        List<TrackMetadata> combined = new ArrayList<>(waveTracks);
+        combined.addAll(page.tracks());
+        waveTracks = List.copyOf(combined);
         return queue.nextTrack();
     }
 
@@ -358,7 +409,8 @@ public final class NowPlaying {
             return;
         }
         List<TrackMetadata> tracks = provider().likedTracks();
-        listed = List.copyOf(tracks);
+        likes = List.copyOf(tracks);
+        listed = likes;
         for (TrackMetadata track : tracks) {
             likedIds.add(track.id());
         }

@@ -15,14 +15,15 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Небольшой кэш обложек в памяти. Токен на адрес картинки не отправляется.
+ * Кэш обложек в памяти. Токен на адрес картинки не отправляется.
  */
 public final class CoverArt {
-    public static final ResourceLocation LOCATION = new ResourceLocation(YandexMusicMod.MOD_ID, "dynamic/cover");
     private static final int MAX_BYTES = 300_000;
     private static final int MAX_ENTRIES = 24;
 
@@ -31,32 +32,45 @@ public final class CoverArt {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
     private static final Map<String, byte[]> CACHE = new ConcurrentHashMap<>();
-    private static volatile String wanted = "";
-    private static volatile boolean ready;
-    private static volatile int imageWidth = 48;
-    private static volatile int imageHeight = 48;
+    private static final Map<String, Cover> COVERS = new ConcurrentHashMap<>();
+    private static final Deque<String> ORDER = new ArrayDeque<>();
 
     private CoverArt() {
     }
 
-    public static boolean ready() {
-        return ready;
-    }
-
-    public static int imageWidth() {
-        return imageWidth;
-    }
-
-    public static int imageHeight() {
-        return imageHeight;
-    }
-
     public static void show(TrackMetadata track) {
-        String url = track == null ? "" : CoverUrls.fromCoverUri(track.coverUri()).orElse("");
-        wanted = url;
-        ready = false;
+        request(track == null ? "" : track.coverUri());
+    }
+
+    public static ResourceLocation location(String coverUri) {
+        String url = CoverUrls.fromCoverUri(coverUri).orElse("");
         if (url.isEmpty()) {
-            ready = false;
+            return null;
+        }
+        Cover cover = COVERS.get(url);
+        return cover != null && cover.ready ? cover.location : null;
+    }
+
+    public static int width(String coverUri) {
+        Cover cover = cover(coverUri);
+        return cover == null ? 1 : cover.width;
+    }
+
+    public static int height(String coverUri) {
+        Cover cover = cover(coverUri);
+        return cover == null ? 1 : cover.height;
+    }
+
+    public static void request(String coverUri) {
+        String url = CoverUrls.fromCoverUri(coverUri).orElse("");
+        if (url.isEmpty()) {
+            return;
+        }
+        Cover existing = COVERS.get(url);
+        if (existing != null) {
+            return;
+        }
+        if (COVERS.putIfAbsent(url, Cover.pending(url)) != null) {
             return;
         }
         byte[] cached = CACHE.get(url);
@@ -70,9 +84,15 @@ public final class CoverArt {
                 remember(url, bytes);
                 Minecraft.getInstance().execute(() -> upload(url, bytes));
             } catch (Exception exception) {
+                COVERS.remove(url);
                 YandexMusicMod.LOGGER.info("Yandex cover skipped");
             }
         });
+    }
+
+    private static Cover cover(String coverUri) {
+        String url = CoverUrls.fromCoverUri(coverUri).orElse("");
+        return url.isEmpty() ? null : COVERS.get(url);
     }
 
     private static byte[] download(String url) throws Exception {
@@ -106,19 +126,44 @@ public final class CoverArt {
     }
 
     private static void upload(String url, byte[] bytes) {
-        if (!url.equals(wanted)) {
-            return;
-        }
         Minecraft minecraft = Minecraft.getInstance();
         try (InputStream input = new ByteArrayInputStream(bytes)) {
             NativeImage image = NativeImage.read(input);
-            imageWidth = Math.max(1, image.getWidth());
-            imageHeight = Math.max(1, image.getHeight());
-            minecraft.getTextureManager().register(LOCATION, new DynamicTexture(image));
-            ready = true;
+            Cover cover = COVERS.computeIfAbsent(url, Cover::pending);
+            cover.width = Math.max(1, image.getWidth());
+            cover.height = Math.max(1, image.getHeight());
+            minecraft.getTextureManager().register(cover.location, new DynamicTexture(image));
+            cover.ready = true;
+            synchronized (ORDER) {
+                ORDER.remove(url);
+                ORDER.addLast(url);
+                while (ORDER.size() > MAX_ENTRIES) {
+                    String old = ORDER.removeFirst();
+                    Cover removed = COVERS.remove(old);
+                    if (removed != null && removed.ready) {
+                        minecraft.getTextureManager().release(removed.location);
+                    }
+                }
+            }
         } catch (Exception exception) {
-            ready = false;
+            COVERS.remove(url);
             YandexMusicMod.LOGGER.info("Yandex cover skipped");
+        }
+    }
+
+    private static final class Cover {
+        private final ResourceLocation location;
+        private volatile boolean ready;
+        private volatile int width = 1;
+        private volatile int height = 1;
+
+        private Cover(ResourceLocation location) {
+            this.location = location;
+        }
+
+        private static Cover pending(String url) {
+            String path = "dynamic/c" + Integer.toUnsignedString(url.hashCode(), 16);
+            return new Cover(new ResourceLocation(YandexMusicMod.MOD_ID, path));
         }
     }
 }

@@ -18,6 +18,10 @@ public final class PersonalVolume {
         return level;
     }
 
+    public static synchronized void set(float value) {
+        level = Math.max(0.0F, Math.min(1.0F, value));
+    }
+
     public static synchronized String label() {
         return Math.round(level * 100) + "%";
     }
