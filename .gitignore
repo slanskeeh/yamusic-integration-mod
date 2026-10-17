@@ -1,0 +1,31 @@
+# eclipse
+bin
+*.launch
+.settings
+.metadata
+.classpath
+.project
+
+# idea
+out
+*.ipr
+*.iws
+*.iml
+.idea
+
+# gradle
+build
+.gradle
+
+# other
+eclipse
+run
+run-data
+
+# Files from Forge MDK
+forge*changelog.txt
+
+# Secrets. Never commit an account token.
+token.txt
+.yandex-music-token
+*.token
