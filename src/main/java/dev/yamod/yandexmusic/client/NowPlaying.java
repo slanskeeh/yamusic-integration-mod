@@ -28,9 +28,16 @@ public final class NowPlaying {
     private static volatile List<TrackMetadata> listed = List.of();
     private static volatile List<TrackMetadata> likes = List.of();
     private static volatile List<TrackMetadata> waveTracks = List.of();
+    private static volatile List<CatalogRef> albums = List.of();
+    private static volatile List<TrackMetadata> openedAlbum = List.of();
+    private static volatile boolean albumOpen;
     private static final Set<String> likedIds = Collections.synchronizedSet(new HashSet<>());
     private static volatile String waveSession = "";
+    private static volatile String waveBatch = "";
+    private static volatile String waveTrackId = "";
+    private static volatile boolean waveIntroSent;
     private static volatile boolean wave;
+    private static volatile WaveNotice pendingLeave;
     private static volatile String status = "Нажмите «Играть» или откройте вкладку коллекции.";
     private static final AtomicBoolean busy = new AtomicBoolean();
     private static volatile boolean endHandled;
@@ -63,6 +70,18 @@ public final class NowPlaying {
 
     public static List<TrackMetadata> waveTracks() {
         return waveTracks;
+    }
+
+    public static List<CatalogRef> albums() {
+        return albums;
+    }
+
+    public static List<TrackMetadata> openedAlbum() {
+        return openedAlbum;
+    }
+
+    public static boolean albumOpen() {
+        return albumOpen;
     }
 
     public static boolean currentLiked() {
@@ -175,10 +194,17 @@ public final class NowPlaying {
                 throw new MusicException("Сначала выберите трек.");
             }
             Optional<TrackMetadata> track = queue.nextTrack();
+            boolean askedStation = false;
             if (track.isEmpty() && wave) {
+                leaveWaveTrack(true);
+                askedStation = true;
                 track = extendWave();
             }
-            return start(track.orElseThrow(() -> new MusicException("Это последний трек в очереди.")));
+            if (track.isEmpty()) {
+                throw new MusicException("Это последний трек в очереди.");
+            }
+            pendingLeave = askedStation ? null : takeWaveNotice(true);
+            return start(track.get());
         });
     }
 
@@ -190,6 +216,7 @@ public final class NowPlaying {
             TrackMetadata track = queue.previousTrack().orElseThrow(() -> new MusicException(
                     "Это первый трек в очереди."
             ));
+            pendingLeave = takeWaveNotice(true);
             return start(track);
         });
     }
@@ -244,11 +271,14 @@ public final class NowPlaying {
     public static void playWave() {
         run("Моя волна", () -> {
             WavePage page = provider().myWave();
+            pendingLeave = takeWaveNotice(true);
             listed = page.tracks();
             waveTracks = listed;
+            waveBatch = page.batchId();
+            waveIntroSent = false;
             LibraryView.show("Моя волна", trackRows(page.tracks()));
             return playTracks(page.tracks(), 0, true, page.sessionId())
-                    + " Повтор очереди зациклит уже загруженную партию.";
+                    + " Станция узнает, какие треки дослушаны и пропущены.";
         });
     }
 
@@ -262,10 +292,37 @@ public final class NowPlaying {
                 likedIds.add(track.id());
             }
             LibraryView.show("Любимые", trackRows(tracks));
-            String tail = tracks.size() >= YandexMusicProvider.COLLECTION_LIMIT
-                    ? " Показаны первые " + YandexMusicProvider.COLLECTION_LIMIT + "."
-                    : "";
-            return "Любимых треков в списке: " + tracks.size() + "." + tail;
+            return "Любимых треков в списке: " + tracks.size() + ".";
+        });
+    }
+
+    public static void showAlbums() {
+        albumOpen = false;
+        run("Альбомы", () -> {
+            List<CatalogRef> found = provider().likedAlbums();
+            albums = List.copyOf(found);
+            if (found.isEmpty()) {
+                return "В любимых альбомах пусто.";
+            }
+            return "Альбомов: " + found.size() + ".";
+        });
+    }
+
+    public static void openAlbum(String albumId) {
+        run("Альбом", () -> {
+            List<TrackMetadata> tracks = provider().albumTracks(albumId);
+            openedAlbum = List.copyOf(tracks);
+            albumOpen = true;
+            String title = "Альбом";
+            for (CatalogRef album : albums) {
+                if (album.id().equals(albumId)) {
+                    title = album.title();
+                    break;
+                }
+            }
+            listed = openedAlbum;
+            LibraryView.show(title, trackRows(tracks));
+            return playTracks(tracks, 0, false, "");
         });
     }
 
@@ -337,10 +394,18 @@ public final class NowPlaying {
     }
 
     public static void stop() {
+        WaveNotice parked = pendingLeave;
+        pendingLeave = null;
+        if (parked != null) {
+            ClientBackground.run(() -> sendWaveNotice(parked));
+        }
+        leaveWaveTrackLater(true);
         userStop = true;
         endHandled = true;
         wave = false;
         waveSession = "";
+        waveBatch = "";
+        waveIntroSent = false;
         PrototypeAudio.release();
         status = "Воспроизведение остановлено.";
     }
@@ -350,8 +415,13 @@ public final class NowPlaying {
             if (queue.size() == 0) {
                 return "Очередь пуста.";
             }
+            WaveNotice finished = takeWaveNotice(false);
             Optional<TrackMetadata> next = queue.onFinished();
             if (next.isEmpty() && wave) {
+                if (finished != null) {
+                    sendWaveNotice(finished);
+                    finished = null;
+                }
                 next = extendWave();
             }
             if (next.isEmpty()) {
@@ -359,6 +429,7 @@ public final class NowPlaying {
                 wave = false;
                 return "Очередь закончилась.";
             }
+            pendingLeave = finished;
             return start(next.get());
         });
     }
@@ -368,23 +439,34 @@ public final class NowPlaying {
             return Optional.empty();
         }
         WavePage page = provider().moreWave(waveSession, queue.ids());
-        if (page.tracks().isEmpty()) {
+        if (!page.batchId().isEmpty()) {
+            waveBatch = page.batchId();
+        }
+        List<TrackMetadata> fresh = new ArrayList<>();
+        Set<String> known = new HashSet<>();
+        for (TrackMetadata existing : waveTracks) {
+            known.add(existing.id());
+        }
+        for (TrackMetadata track : page.tracks()) {
+            if (known.add(track.id())) {
+                fresh.add(track);
+            }
+        }
+        if (fresh.isEmpty()) {
             return Optional.empty();
         }
-        queue.append(page.tracks());
+        queue.append(fresh);
         List<TrackMetadata> combined = new ArrayList<>(waveTracks);
-        combined.addAll(page.tracks());
+        combined.addAll(fresh);
         waveTracks = List.copyOf(combined);
+        listed = waveTracks;
         return queue.nextTrack();
     }
 
     private static String openTracks(List<TrackMetadata> tracks, String title) throws Exception {
         listed = List.copyOf(tracks);
         LibraryView.show(title, trackRows(tracks));
-        String tail = tracks.size() >= YandexMusicProvider.COLLECTION_LIMIT
-                ? " Показаны первые " + YandexMusicProvider.COLLECTION_LIMIT + "."
-                : "";
-        return playTracks(tracks, 0, false, "") + tail;
+        return playTracks(tracks, 0, false, "");
     }
 
     private static String playTracks(List<TrackMetadata> tracks, int index, boolean asWave, String sessionId) throws Exception {
@@ -398,9 +480,16 @@ public final class NowPlaying {
         next.setRepeat(repeat);
         next.select(startAt);
         next.setShuffle(shuffle);
+        if (wave && !waveTrackId.isEmpty()) {
+            pendingLeave = takeWaveNotice(true);
+        }
         queue = next;
         wave = asWave;
         waveSession = asWave ? sessionId : "";
+        if (!asWave) {
+            waveBatch = "";
+            waveIntroSent = false;
+        }
         return start(next.current().orElseThrow(() -> new MusicException("В этом списке нет треков.")));
     }
 
@@ -430,7 +519,77 @@ public final class NowPlaying {
             throw exception;
         }
         CoverArt.show(track);
+        WaveNotice left = pendingLeave;
+        pendingLeave = null;
+        if (left != null) {
+            sendWaveNotice(left);
+        }
+        announceWave(track);
         return "Играет: " + track.artists() + " — " + track.title();
+    }
+
+    private static void announceWave(TrackMetadata track) {
+        if (!wave || waveSession.isEmpty()) {
+            return;
+        }
+        try {
+            YandexMusicProvider music = provider();
+            if (!waveIntroSent) {
+                try {
+                    music.waveFeedback(waveSession, waveBatch, "radioStarted", "", 0);
+                } catch (Exception ignored) {
+                    // станция может не принять событие, локальный трек уже играет
+                }
+                waveIntroSent = true;
+            }
+            try {
+                music.waveFeedback(waveSession, waveBatch, "trackStarted", track.id(), 0);
+            } catch (Exception ignored) {
+                // следующая партия всё равно уйдёт с очередью уже сыгранных идентификаторов
+            }
+        } catch (Exception ignored) {
+            // без токена сюда не доходим: трек уже открыт
+        }
+        waveTrackId = track.id();
+    }
+
+    private static void leaveWaveTrack(boolean skipped) {
+        WaveNotice notice = takeWaveNotice(skipped);
+        if (notice != null) {
+            sendWaveNotice(notice);
+        }
+    }
+
+    private static void leaveWaveTrackLater(boolean skipped) {
+        WaveNotice notice = takeWaveNotice(skipped);
+        if (notice != null) {
+            ClientBackground.run(() -> sendWaveNotice(notice));
+        }
+    }
+
+    private static WaveNotice takeWaveNotice(boolean skipped) {
+        if (!wave || waveSession.isEmpty() || waveTrackId.isEmpty()) {
+            waveTrackId = "";
+            return null;
+        }
+        double played = Math.max(0, PrototypeAudio.controller().positionMillis() / 1000.0);
+        WaveNotice notice = new WaveNotice(waveSession, waveBatch, waveTrackId, skipped, played);
+        waveTrackId = "";
+        return notice;
+    }
+
+    private static void sendWaveNotice(WaveNotice notice) {
+        try {
+            provider().waveFeedback(
+                    notice.sessionId,
+                    notice.batchId,
+                    notice.skipped ? "skip" : "trackFinished",
+                    notice.trackId,
+                    notice.playedSeconds
+            );
+        } catch (Exception ignored) {
+            // пропуск отчёта не останавливает локальное воспроизведение
+        }
     }
 
     private static List<LibraryView.Row> trackRows(List<TrackMetadata> tracks) {
@@ -500,5 +659,8 @@ public final class NowPlaying {
     @FunctionalInterface
     private interface Task {
         String run() throws Exception;
+    }
+
+    private record WaveNotice(String sessionId, String batchId, String trackId, boolean skipped, double playedSeconds) {
     }
 }

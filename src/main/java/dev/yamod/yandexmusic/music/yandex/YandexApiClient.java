@@ -62,6 +62,11 @@ public final class YandexApiClient {
         return YandexJson.likedTrackIds(get("/users/" + uid + "/likes/tracks?if-modified-since-revision=0"));
     }
 
+    public List<CatalogRef> likedAlbums(long uid) {
+        requireUid(uid);
+        return YandexJson.likedAlbums(get("/users/" + uid + "/likes/albums"));
+    }
+
     public TrackMetadata track(String trackId) {
         List<TrackMetadata> tracks = tracks(List.of(trackId));
         if (tracks.isEmpty()) {
@@ -153,10 +158,32 @@ public final class YandexApiClient {
         return YandexJson.wave(postJson("/rotor/session/new", body.toString()));
     }
 
-    public WavePage moreWave(String sessionId, List<String> queue) {
-        if (sessionId == null || !sessionId.matches("[A-Za-z0-9._:-]{1,80}") || sessionId.contains("..")) {
-            throw new MusicException("Идентификатор радиосессии отклонён.");
+    public void waveFeedback(String sessionId, String batchId, String type, String trackId, double playedSeconds) {
+        String session = requireSessionId(sessionId);
+        if (!type.equals("radioStarted") && !type.equals("trackStarted")
+                && !type.equals("trackFinished") && !type.equals("skip")) {
+            throw new MusicException("Событие волны отклонено.");
         }
+        JsonObject event = new JsonObject();
+        event.addProperty("type", type);
+        event.addProperty("timestamp", Instant.now().toString());
+        if (trackId != null && !trackId.isBlank()) {
+            event.addProperty("trackId", TrackIds.apiId(trackId));
+        }
+        if (type.equals("trackFinished") || type.equals("skip")) {
+            event.addProperty("totalPlayedSeconds", Math.max(0, playedSeconds));
+        }
+        JsonObject body = new JsonObject();
+        body.add("event", event);
+        if (batchId != null && !batchId.isBlank()) {
+            body.addProperty("batchId", batchId);
+        }
+        String path = "/rotor/session/" + URLEncoder.encode(session, StandardCharsets.UTF_8) + "/feedback";
+        postJson(path, body.toString());
+    }
+
+    public WavePage moreWave(String sessionId, List<String> queue) {
+        sessionId = requireSessionId(sessionId);
         JsonObject body = new JsonObject();
         JsonArray played = new JsonArray();
         if (queue != null) {
@@ -265,6 +292,13 @@ public final class YandexApiClient {
                 json
         ));
         return finish(response);
+    }
+
+    private static String requireSessionId(String sessionId) {
+        if (sessionId == null || !sessionId.matches("[A-Za-z0-9._:-]{1,80}") || sessionId.contains("..")) {
+            throw new MusicException("Идентификатор радиосессии отклонён.");
+        }
+        return sessionId;
     }
 
     private static void requireUid(long uid) {

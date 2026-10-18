@@ -30,8 +30,6 @@ public final class YandexMusicProvider {
         return client.accountStatus();
     }
 
-    public static final int COLLECTION_LIMIT = 100;
-
     public TrackMetadata firstLikedTrack() {
         List<TrackMetadata> tracks = likedTracks();
         return tracks.get(0);
@@ -46,6 +44,10 @@ public final class YandexMusicProvider {
         return loadTracks(ids);
     }
 
+    public List<CatalogRef> likedAlbums() {
+        return client.likedAlbums(account().uid());
+    }
+
     public SearchPage search(String text) {
         return client.search(text);
     }
@@ -55,15 +57,15 @@ public final class YandexMusicProvider {
     }
 
     public List<TrackMetadata> playlistTracks(long uid, long kind) {
-        return cap(client.playlistTracks(uid, kind), "В плейлисте нет треков, которые можно поставить в очередь.");
+        return requireTracks(client.playlistTracks(uid, kind), "В плейлисте нет треков, которые можно поставить в очередь.");
     }
 
     public List<TrackMetadata> albumTracks(String albumId) {
-        return cap(client.albumTracks(albumId), "В альбоме нет треков, которые можно поставить в очередь.");
+        return requireTracks(client.albumTracks(albumId), "В альбоме нет треков, которые можно поставить в очередь.");
     }
 
     public List<TrackMetadata> artistTracks(String artistId) {
-        return cap(client.artistTracks(artistId), "У исполнителя не нашлось треков для очереди.");
+        return requireTracks(client.artistTracks(artistId), "У исполнителя не нашлось треков для очереди.");
     }
 
     public void setTrackLiked(String trackId, boolean liked) {
@@ -80,6 +82,10 @@ public final class YandexMusicProvider {
 
     public WavePage moreWave(String sessionId, List<String> queue) {
         return client.moreWave(sessionId, queue);
+    }
+
+    public void waveFeedback(String sessionId, String batchId, String type, String trackId, double playedSeconds) {
+        client.waveFeedback(sessionId, batchId, type, trackId, playedSeconds);
     }
 
     public StreamDecision availability(String trackId) {
@@ -102,9 +108,6 @@ public final class YandexMusicProvider {
     }
 
     private List<TrackMetadata> loadTracks(List<String> ids) {
-        if (ids.size() > COLLECTION_LIMIT) {
-            ids = ids.subList(0, COLLECTION_LIMIT);
-        }
         List<TrackMetadata> tracks = client.tracks(ids);
         if (tracks.isEmpty()) {
             throw new MusicException("Сервис не вернул метаданные любимых треков.");
@@ -112,12 +115,9 @@ public final class YandexMusicProvider {
         return tracks;
     }
 
-    private static List<TrackMetadata> cap(List<TrackMetadata> tracks, String emptyMessage) {
+    private static List<TrackMetadata> requireTracks(List<TrackMetadata> tracks, String emptyMessage) {
         if (tracks == null || tracks.isEmpty()) {
             throw new MusicException(emptyMessage);
-        }
-        if (tracks.size() > COLLECTION_LIMIT) {
-            return List.copyOf(tracks.subList(0, COLLECTION_LIMIT));
         }
         return tracks;
     }

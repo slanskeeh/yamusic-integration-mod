@@ -5,8 +5,10 @@ import dev.yamod.yandexmusic.client.CoverArt;
 import dev.yamod.yandexmusic.client.LibraryView;
 import dev.yamod.yandexmusic.client.NowPlaying;
 import dev.yamod.yandexmusic.client.PersonalVolume;
+import dev.yamod.yandexmusic.client.PrototypeKeyMappings;
 import dev.yamod.yandexmusic.music.PlaybackTime;
 import dev.yamod.yandexmusic.music.RepeatMode;
+import dev.yamod.yandexmusic.music.model.CatalogRef;
 import dev.yamod.yandexmusic.music.model.TrackMetadata;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
@@ -162,15 +164,15 @@ public final class PrototypeScreen extends Screen {
             return true;
         }
         if (search == null || !search.isFocused()) {
-            if (keyCode == GLFW.GLFW_KEY_SPACE) {
+            if (keyCode == GLFW.GLFW_KEY_SPACE || PrototypeKeyMappings.PLAY_PAUSE.matches(keyCode, scanCode)) {
                 NowPlaying.playOrResume();
                 return true;
             }
-            if (keyCode == GLFW.GLFW_KEY_RIGHT) {
+            if (keyCode == GLFW.GLFW_KEY_RIGHT || PrototypeKeyMappings.NEXT.matches(keyCode, scanCode)) {
                 NowPlaying.next();
                 return true;
             }
-            if (keyCode == GLFW.GLFW_KEY_LEFT) {
+            if (keyCode == GLFW.GLFW_KEY_LEFT || PrototypeKeyMappings.PREVIOUS.matches(keyCode, scanCode)) {
                 NowPlaying.previous();
                 return true;
             }
@@ -192,7 +194,11 @@ public final class PrototypeScreen extends Screen {
                 section = Section.LIKES;
                 NowPlaying.showLikes();
             }
-            case "albums" -> section = Section.ALBUMS;
+            case "albums", "go-albums" -> {
+                section = Section.ALBUMS;
+                scrolls[section.ordinal()] = 0;
+                NowPlaying.showAlbums();
+            }
             case "artists" -> section = Section.ARTISTS;
             case "search-nav" -> section = Section.SEARCH;
             case "playlists" -> {
@@ -228,6 +234,11 @@ public final class PrototypeScreen extends Screen {
                     NowPlaying.playAt(NowPlaying.listedTracks(), number(id), false);
                 } else if (id.startsWith("row:")) {
                     NowPlaying.openRow(number(id));
+                } else if (id.startsWith("album:")) {
+                    scrolls[Section.ALBUMS.ordinal()] = 0;
+                    NowPlaying.openAlbum(id.substring("album:".length()));
+                } else if (id.startsWith("album-track:")) {
+                    NowPlaying.playAt(NowPlaying.openedAlbum(), number(id), false);
                 }
             }
         }
@@ -330,7 +341,13 @@ public final class PrototypeScreen extends Screen {
             }
             case COLLECTION -> drawHub(graphics, mouseX, mouseY);
             case PLAYLISTS -> drawRows(graphics, mouseX, mouseY, LibraryView.rows(), frame.gridTop);
-            case ALBUMS -> drawRows(graphics, mouseX, mouseY, filter(LibraryView.Kind.ALBUM), frame.gridTop);
+            case ALBUMS -> {
+                if (NowPlaying.albumOpen()) {
+                    drawTracks(graphics, mouseX, mouseY, NowPlaying.openedAlbum(), "album-track:", frame.gridTop);
+                } else {
+                    drawAlbums(graphics, mouseX, mouseY);
+                }
+            }
             case ARTISTS -> drawRows(graphics, mouseX, mouseY, filter(LibraryView.Kind.ARTIST), frame.gridTop);
             case SEARCH -> {
                 int top = frame.gridTop;
@@ -357,6 +374,7 @@ public final class PrototypeScreen extends Screen {
     private void drawHub(GuiGraphics graphics, int mouseX, int mouseY) {
         int y = frame.gridTop;
         y = hub(graphics, mouseX, mouseY, y, "go-likes", PlayerStyle.text("Любимые треки", "Liked tracks"), PlayerStyle.text("То, что вы отметили", "Tracks you marked"));
+        y = hub(graphics, mouseX, mouseY, y, "go-albums", PlayerStyle.text("Альбомы", "Albums"), PlayerStyle.text("Альбомы из вашей коллекции", "Albums in your collection"));
         y = hub(graphics, mouseX, mouseY, y, "go-playlists", PlayerStyle.text("Плейлисты", "Playlists"), PlayerStyle.text("Списки вашего аккаунта", "Lists on your account"));
         hub(graphics, mouseX, mouseY, y, "go-search", PlayerStyle.text("Поиск", "Search"), PlayerStyle.text("Треки, альбомы, исполнители", "Tracks, albums, artists"));
     }
@@ -410,6 +428,44 @@ public final class PrototypeScreen extends Screen {
             }
         }
         return top + rowCount * (cardH + gap);
+    }
+
+    private void drawAlbums(GuiGraphics graphics, int mouseX, int mouseY) {
+        List<CatalogRef> albums = NowPlaying.albums();
+        int top = frame.gridTop;
+        if (albums.isEmpty()) {
+            graphics.drawString(this.font, PlayerStyle.text("Пока нет любимых альбомов.", "No liked albums yet."), frame.contentX, top, PlayerStyle.muted());
+            return;
+        }
+        int gap = 8;
+        int cols = Math.max(2, frame.contentW / 86);
+        int cardW = Math.min(78, (frame.contentW - gap * (cols - 1)) / cols);
+        int cardH = cardW + 24;
+        int rowCount = (albums.size() + cols - 1) / cols;
+        int visible = Math.max(1, (frame.gridBottom - top) / (cardH + gap));
+        int scroll = Math.min(scrolls[section.ordinal()], Math.max(0, rowCount - visible));
+        scrolls[section.ordinal()] = scroll;
+        int originY = top - scroll * (cardH + gap);
+        for (int i = 0; i < albums.size(); i++) {
+            int col = i % cols;
+            int row = i / cols;
+            int x = frame.contentX + col * (cardW + gap);
+            int y = originY + row * (cardH + gap);
+            if (y > frame.gridBottom || y + cardH < frame.gridTop) {
+                continue;
+            }
+            CatalogRef album = albums.get(i);
+            boolean hover = inside(x, y, cardW, cardH, mouseX, mouseY);
+            if (hover) {
+                graphics.fill(x - 2, y - 2, x + cardW + 2, y + cardH, PlayerStyle.cardHover());
+            }
+            drawCover(graphics, album.coverUri(), album.title(), x, y, cardW);
+            graphics.drawString(this.font, fit(album.title(), cardW), x, y + cardW + 3, PlayerStyle.ink());
+            graphics.drawString(this.font, fit(album.subtitle(), cardW), x, y + cardW + 13, PlayerStyle.muted());
+            if (y + cardH > frame.gridTop && y < frame.gridBottom) {
+                hit(x, y, cardW, cardH, "album:" + album.id());
+            }
+        }
     }
 
     private void drawRows(GuiGraphics graphics, int mouseX, int mouseY, List<LibraryView.Row> rows, int top) {

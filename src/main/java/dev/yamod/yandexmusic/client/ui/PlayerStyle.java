@@ -1,7 +1,16 @@
 package dev.yamod.yandexmusic.client.ui;
 
+import dev.yamod.yandexmusic.client.ClientTokenStore;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+
 /**
- * Цвета и переключатели внешнего вида. Живут только в этой сессии клиента.
+ * Цвета и язык плеера. Пишутся в config/yandexmusic/appearance.properties, рядом с токеном, но не в него.
  */
 public final class PlayerStyle {
     public enum Theme {
@@ -21,39 +30,74 @@ public final class PlayerStyle {
     private static Theme theme = Theme.DARK;
     private static int accent = ACCENTS[0];
     private static boolean english;
+    private static boolean loaded;
 
     private PlayerStyle() {
     }
 
+    public static void load() {
+        if (loaded) {
+            return;
+        }
+        loaded = true;
+        Path file = appearanceFile();
+        if (!Files.isRegularFile(file)) {
+            return;
+        }
+        Properties properties = new Properties();
+        try (InputStream input = Files.newInputStream(file)) {
+            properties.load(input);
+        } catch (IOException exception) {
+            return;
+        }
+        theme = "LIGHT".equalsIgnoreCase(properties.getProperty("theme", "DARK")) ? Theme.LIGHT : Theme.DARK;
+        english = Boolean.parseBoolean(properties.getProperty("english", "false"));
+        String hex = properties.getProperty("accent", "");
+        if (hex != null && hex.matches("[0-9A-Fa-f]{8}")) {
+            accent = (int) Long.parseLong(hex, 16);
+        }
+    }
+
     public static Theme theme() {
+        load();
         return theme;
     }
 
     public static void theme(Theme value) {
+        load();
         theme = value == null ? Theme.DARK : value;
+        save();
     }
 
     public static int accent() {
+        load();
         return accent;
     }
 
     public static void accent(int color) {
+        load();
         accent = color;
+        save();
     }
 
     public static boolean english() {
+        load();
         return english;
     }
 
     public static void english(boolean value) {
+        load();
         english = value;
+        save();
     }
 
     public static String text(String russian, String englishText) {
+        load();
         return english ? englishText : russian;
     }
 
     public static int window() {
+        load();
         return theme == Theme.DARK ? 0xFF121212 : 0xFFF4F4F4;
     }
 
@@ -82,6 +126,7 @@ public final class PlayerStyle {
     }
 
     public static int ink() {
+        load();
         return theme == Theme.DARK ? 0xFFF5F5F5 : 0xFF161616;
     }
 
@@ -91,5 +136,25 @@ public final class PlayerStyle {
 
     public static int track() {
         return theme == Theme.DARK ? 0xFF3A3A3A : 0xFFD8D8D8;
+    }
+
+    private static void save() {
+        Path file = appearanceFile();
+        Properties properties = new Properties();
+        properties.setProperty("theme", theme.name());
+        properties.setProperty("english", Boolean.toString(english));
+        properties.setProperty("accent", String.format("%08X", accent & 0xFFFFFFFFL));
+        try {
+            Files.createDirectories(file.getParent());
+            try (OutputStream output = Files.newOutputStream(file)) {
+                properties.store(output, "Yandex Music appearance");
+            }
+        } catch (IOException exception) {
+            // внешний вид остаётся в памяти, если файл недоступен
+        }
+    }
+
+    private static Path appearanceFile() {
+        return ClientTokenStore.file().getParent().resolve("appearance.properties");
     }
 }

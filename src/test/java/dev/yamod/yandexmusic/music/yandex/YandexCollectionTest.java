@@ -8,6 +8,7 @@ import dev.yamod.yandexmusic.music.model.WavePage;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -54,14 +55,97 @@ class YandexCollectionTest {
     @Test
     void waveReadsSessionAndSkipsForeignIds() {
         WavePage page = YandexJson.wave(JsonParser.parseString("""
-                {"radioSessionId":"session-1","sequence":[
+                {"radioSessionId":"session-1","batchId":"batch-9","sequence":[
                   {"track":{"id":"not-a-track","title":"Подкаст"}},
                   {"track":{"id":"15","title":"Песня","artists":[{"name":"А"}]}}
                 ]}
                 """));
         assertEquals("session-1", page.sessionId());
+        assertEquals("batch-9", page.batchId());
         assertEquals(1, page.tracks().size());
         assertEquals("15", page.tracks().get(0).id());
+    }
+
+    @Test
+    void likedAlbumsKeepCoverAndSkipForeignIds() {
+        var albums = YandexJson.likedAlbums(JsonParser.parseString("""
+                [{"album":{"id":20,"title":"Альбом","artists":[{"name":"Б"}],"coverUri":"avatars.yandex.net/get-music/%%"}},
+                 {"album":{"id":"not-a-number","title":"Подкаст"}}]
+                """));
+        assertEquals(1, albums.size());
+        assertEquals("20", albums.get(0).id());
+        assertEquals("Б", albums.get(0).subtitle());
+        assertEquals("avatars.yandex.net/get-music/%%", albums.get(0).coverUri());
+    }
+
+    @Test
+    void likedAlbumsUseTheLikesPath() {
+        AtomicReference<HttpRequestData> seen = new AtomicReference<>();
+        YandexApiClient client = new YandexApiClient(new HttpTransport() {
+            @Override
+            public HttpResponseData exchange(HttpRequestData request) {
+                seen.set(request);
+                return new HttpResponseData(200, "{\"result\":[]}");
+            }
+
+            @Override
+            public byte[] getBytes(String url) {
+                return new byte[0];
+            }
+
+            @Override
+            public InputStream openStream(String url) {
+                return InputStream.nullInputStream();
+            }
+        }, TOKEN);
+        assertTrue(client.likedAlbums(7).isEmpty());
+        assertEquals("GET", seen.get().method());
+        assertTrue(seen.get().url().endsWith("/users/7/likes/albums"));
+        assertFalse(seen.get().headers().get("Authorization").isBlank());
+    }
+
+    @Test
+    void waveFeedbackUsesSessionPath() {
+        AtomicReference<HttpRequestData> seen = new AtomicReference<>();
+        YandexApiClient client = new YandexApiClient(new FakeTransport(seen), TOKEN);
+        client.waveFeedback("session-1", "batch-9", "skip", "15", 12.5);
+        assertTrue(seen.get().url().endsWith("/rotor/session/session-1/feedback"));
+        assertEquals("application/json", seen.get().headers().get("Content-Type"));
+        assertTrue(seen.get().body().contains("\"type\":\"skip\""));
+        assertTrue(seen.get().body().contains("\"trackId\":\"15\""));
+        assertTrue(seen.get().body().contains("\"batchId\":\"batch-9\""));
+        assertTrue(seen.get().body().contains("totalPlayedSeconds"));
+        assertFalse(seen.get().body().contains(TOKEN));
+    }
+
+    @Test
+    void trackRequestsContinuePastFifty() {
+        List<String> bodies = new ArrayList<>();
+        YandexApiClient client = new YandexApiClient(new HttpTransport() {
+            @Override
+            public HttpResponseData exchange(HttpRequestData request) {
+                bodies.add(request.body());
+                return new HttpResponseData(200, "{\"result\":[{\"id\":\"1\",\"title\":\"A\",\"artists\":[]}]}");
+            }
+
+            @Override
+            public byte[] getBytes(String url) {
+                return new byte[0];
+            }
+
+            @Override
+            public InputStream openStream(String url) {
+                return InputStream.nullInputStream();
+            }
+        }, TOKEN);
+        List<String> ids = new ArrayList<>();
+        for (int i = 1; i <= 51; i++) {
+            ids.add(Integer.toString(i));
+        }
+        assertEquals(2, client.tracks(ids).size());
+        assertEquals(2, bodies.size());
+        assertFalse(bodies.get(0).contains("51"));
+        assertTrue(bodies.get(1).contains("track-ids=51"));
     }
 
     @Test

@@ -32,9 +32,10 @@
 - `GET /artists/{id}/tracks?page=0&page-size=40` — треки исполнителя.
 - `GET /users/{uid}/playlists/list` и `GET /users/{uid}/playlists/{kind}` — плейлисты пользователя.
 - `POST /users/{uid}/likes/tracks/add-multiple` и `POST /users/{uid}/likes/tracks/remove` с полем `track-ids`. Успех — только если в `result` есть `revision`.
-- `POST /rotor/session/new` с JSON `{"seeds":["user:onyourwave"],"includeTracksInResponse":true}` и `POST /rotor/session/{id}/tracks` для следующей партии.
+- `POST /rotor/session/new` с JSON `{"seeds":["user:onyourwave"],"includeTracksInResponse":true}` и `POST /rotor/session/{id}/tracks` для следующей партии. `POST /rotor/session/{id}/feedback` сообщает `radioStarted`, `trackStarted`, `trackFinished` или `skip`. В теле есть `batchId`, если станция его прислала. Пропуск или конец трека уходит до запроса следующей партии.
+- `GET /users/{uid}/likes/albums` — альбомы, отмеченные пользователем.
 
-Подкасты, клипы и изменение состава плейлиста не запрашиваются. В очередь ставится не больше 100 треков. Обложка берётся из `coverUri` или `ogImage`, `%%` заменяется на `200x200`, адрес остаётся https-доменом Яндекса.
+Подкасты, клипы и изменение состава плейлиста не запрашиваются. Любимые треки загружаются все, метаданные — пачками по 50. Обложка берётся из `coverUri` или `ogImage`, `%%` заменяется на `200x200`, адрес остаётся https-доменом Яндекса.
 
 ## Зашифрованная доставка
 

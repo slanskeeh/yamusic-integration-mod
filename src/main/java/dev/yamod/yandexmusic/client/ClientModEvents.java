@@ -1,6 +1,7 @@
 package dev.yamod.yandexmusic.client;
 
 import dev.yamod.yandexmusic.YandexMusicMod;
+import dev.yamod.yandexmusic.client.ui.PlayerStyle;
 import dev.yamod.yandexmusic.client.ui.PrototypeScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
@@ -9,6 +10,7 @@ import net.minecraftforge.event.GameShuttingDownEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 
 public final class ClientModEvents {
     private ClientModEvents() {
@@ -22,6 +24,14 @@ public final class ClientModEvents {
         @SubscribeEvent
         public static void registerKeys(RegisterKeyMappingsEvent event) {
             event.register(PrototypeKeyMappings.OPEN_PROTOTYPE);
+            event.register(PrototypeKeyMappings.PLAY_PAUSE);
+            event.register(PrototypeKeyMappings.PREVIOUS);
+            event.register(PrototypeKeyMappings.NEXT);
+        }
+
+        @SubscribeEvent
+        public static void setup(FMLClientSetupEvent event) {
+            event.enqueueWork(PlayerStyle::load);
         }
     }
 
@@ -42,6 +52,15 @@ public final class ClientModEvents {
                 if (minecraft.screen == null) {
                     minecraft.setScreen(new PrototypeScreen());
                 }
+            }
+            while (PrototypeKeyMappings.PLAY_PAUSE.consumeClick()) {
+                NowPlaying.playOrResume();
+            }
+            while (PrototypeKeyMappings.PREVIOUS.consumeClick()) {
+                NowPlaying.previous();
+            }
+            while (PrototypeKeyMappings.NEXT.consumeClick()) {
+                NowPlaying.next();
             }
         }
 

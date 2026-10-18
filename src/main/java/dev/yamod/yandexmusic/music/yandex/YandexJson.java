@@ -59,6 +59,47 @@ public final class YandexJson {
         return List.copyOf(ids);
     }
 
+    public static List<CatalogRef> likedAlbums(JsonElement result) {
+        JsonArray array = null;
+        if (result != null && result.isJsonArray()) {
+            array = result.getAsJsonArray();
+        } else if (result != null && result.isJsonObject()) {
+            JsonObject object = result.getAsJsonObject();
+            if (object.has("albums") && object.get("albums").isJsonArray()) {
+                array = object.getAsJsonArray("albums");
+            }
+        }
+        if (array == null) {
+            return List.of();
+        }
+        List<CatalogRef> refs = new ArrayList<>();
+        for (JsonElement element : array) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject item = element.getAsJsonObject();
+            JsonObject album = object(item, "album");
+            if (album == null && item.has("title")) {
+                album = item;
+            }
+            if (album == null) {
+                continue;
+            }
+            String id = string(album, "id");
+            if (!id.matches("[0-9]{1,20}")) {
+                continue;
+            }
+            refs.add(new CatalogRef(
+                    id,
+                    "",
+                    string(album, "title"),
+                    artistNames(album),
+                    firstText(album, "coverUri", "ogImage")
+            ));
+        }
+        return List.copyOf(refs);
+    }
+
     public static TrackMetadata track(JsonElement result) {
         JsonObject track = firstObject(result);
         if (track == null) {
@@ -254,6 +295,7 @@ public final class YandexJson {
         }
         JsonObject object = result.getAsJsonObject();
         String sessionId = firstText(object, "radioSessionId", "radio_session_id");
+        String batchId = firstText(object, "batchId", "batch_id");
         boolean terminated = object.has("terminated")
                 && object.get("terminated").isJsonPrimitive()
                 && object.get("terminated").getAsBoolean();
@@ -271,7 +313,7 @@ public final class YandexJson {
         } else if (object.has("tracks")) {
             tracks.addAll(tracks(object.get("tracks")));
         }
-        return new WavePage(sessionId, tracks, terminated);
+        return new WavePage(sessionId, batchId, tracks, terminated);
     }
 
     public static boolean likeConfirmed(JsonElement result) {
@@ -302,7 +344,7 @@ public final class YandexJson {
             }
             String title = artist ? string(item, "name") : string(item, "title");
             String subtitle = artist ? "" : artistNames(item);
-            refs.add(new CatalogRef(id, "", title, subtitle));
+            refs.add(new CatalogRef(id, "", title, subtitle, firstText(item, "coverUri", "ogImage")));
         }
         return List.copyOf(refs);
     }

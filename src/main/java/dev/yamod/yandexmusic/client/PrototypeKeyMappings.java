@@ -15,6 +15,27 @@ public final class PrototypeKeyMappings {
             GLFW.GLFW_KEY_Y,
             CATEGORY
     );
+    public static final KeyMapping PLAY_PAUSE = new KeyMapping(
+            "key.yandexmusic.play_pause",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_J,
+            CATEGORY
+    );
+    public static final KeyMapping PREVIOUS = new KeyMapping(
+            "key.yandexmusic.previous",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_K,
+            CATEGORY
+    );
+    public static final KeyMapping NEXT = new KeyMapping(
+            "key.yandexmusic.next",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_L,
+            CATEGORY
+    );
 
     private PrototypeKeyMappings() {
     }
