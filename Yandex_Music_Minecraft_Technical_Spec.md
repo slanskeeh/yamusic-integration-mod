@@ -1,4 +1,4 @@
-# Yandex Music Integration
+# Redio
 
 ## Техническое задание и план разработки для Cursor
 
@@ -6,7 +6,7 @@
 **Игра:** Minecraft Java Edition 1.20.1\
 **Загрузчик:** Minecraft Forge 47.x\
 **Java:** 17\
-**Рабочее название:** Yandex Music Integration\
+**Рабочее название:** Redio\
 **Целевая аудитория документа:** разработчик и AI-агент Cursor\
 **Главный принцип:** сначала доказать работоспособность интеграции и
 воспроизведения, затем последовательно реализовывать функции на
@@ -281,7 +281,7 @@ events; - KeyMapping; - сетевые пакеты; - серверные про
 разработки. Ниже приведён рекомендуемый эскиз структуры:
 
 ``` text
-yandexmusic/
+redio/
 ├── build.gradle
 ├── settings.gradle
 ├── gradle.properties
@@ -295,7 +295,7 @@ yandexmusic/
 │       ├── PHASE_2_PROMPT.md
 │       └── ...
 ├── src/main/java/<package>/
-│   ├── YandexMusicMod.java
+│   ├── RedioMod.java
 │   ├── client/
 │   │   ├── ui/
 │   │   └── input/

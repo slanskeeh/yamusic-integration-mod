@@ -5,21 +5,21 @@
 ### Реализовано
 
 - Пустой каталог превращён в проект Forge MDK Minecraft 1.20.1, Forge 47.4.28, Java 17.
-- `modid` `yandexmusic`, пакет `dev.yamod.yandexmusic`, версия `0.1.0`.
+- `modid` `redio`, пакет `dev.yamod.redio`, версия `0.1.0`.
 - Экран прототипа на клавише `Y`: проверка аккаунта, метаданные первого любимого трека, классификация потока, воспроизведение незашифрованного mp3, пауза, стоп и локальный тестовый тон.
 - Зашифрованный `encraw` отклоняется, ключ из ответа не читается.
-- Токен берётся только из `YANDEX_MUSIC_TOKEN` или `config/yandexmusic/token.txt`.
+- Токен берётся только из `YANDEX_MUSIC_TOKEN` или `config/redio/token.txt`.
 - Документы: `docs/TECHNICAL_SPEC.md`, `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, `docs/YANDEX_MUSIC_API.md`, задания фаз в `docs/prompts/`.
 
 ### Файлы
 
-Созданы Gradle-файлы MDK, исходники в `src/main/java/dev/yamod/yandexmusic/`, тесты в `src/test/java`, ресурсы языка, документы в `docs/`. Исходная спецификация `Yandex_Music_Minecraft_Technical_Spec.md` не переписывалась.
+Созданы Gradle-файлы MDK, исходники в `src/main/java/dev/yamod/redio/`, тесты в `src/test/java`, ресурсы языка, документы в `docs/`. Исходная спецификация `Yandex_Music_Minecraft_Technical_Spec.md` не переписывалась.
 
 ### Проверки
 
 - `./gradlew test` — успешно, 18 тестов, 0 падений. Наборы: `TokenAndSecretTest` 6, `YandexApiClientTest` 7, `StreamChooserTest` 3, `PlaybackControllerTest` 2.
-- `./gradlew build` — успешно. Собраны `build/libs/yandexmusic-0.1.0.jar` и `yandexmusic-0.1.0-all.jar`. Во втором лежит `META-INF/jarjar/jlayer-1.0.1.jar`.
-- `./gradlew runClient` — клиент дошёл до `Sound engine started`. Forge 47.4.28 увидел мод `yandexmusic` 0.1.0 и подписал клиентские обработчики. Окно после этого закрыто.
+- `./gradlew build` — успешно. Собраны `build/libs/redio-0.1.0.jar` и `redio-0.1.0-all.jar`. Во втором лежит `META-INF/jarjar/jlayer-1.0.1.jar`.
+- `./gradlew runClient` — клиент дошёл до `Sound engine started`. Forge 47.4.28 увидел мод `redio` 0.1.0 и подписал клиентские обработчики. Окно после этого закрыто.
 - `GET https://api.music.yandex.net/account/status` без токена — HTTP 200, гостевой статус без `uid`.
 
 Команды запускались на JDK Temurin 17.0.20.1. В системе по умолчанию была Java 8, поэтому для сборки задавался `JAVA_HOME`.
@@ -163,7 +163,7 @@
 - Любимые треки и содержимое альбома или плейлиста больше не обрезаются на 100. Метаданные по-прежнему запрашиваются пачками по 50.
 - Раздел «Альбомы» берёт `GET /users/{uid}/likes/albums` и открывает альбом целиком. Состав плейлистов, подкасты и клипы не добавлялись.
 - «Моя волна» шлёт `radioStarted`, `trackStarted`, `trackFinished` и `skip` на `/rotor/session/{id}/feedback` и сохраняет `batchId`. Пропуск уходит до запроса следующей партии.
-- Тема, акцентный цвет и язык пишутся в `config/yandexmusic/appearance.properties`.
+- Тема, акцентный цвет и язык пишутся в `config/redio/appearance.properties`.
 - Клавиши в меню управления: открыть плеер (`Y`), играть или пауза (`J`), предыдущий (`K`), следующий (`L`).
 
 ### Проверки
@@ -178,7 +178,7 @@
 
 ### Реализовано
 
-- В настройках кнопка «Войти через Яндекс» запрашивает код устройства и открывает страницу Яндекса. Пароль в игру не вводится. После подтверждения токен пишется в `config/yandexmusic/token.txt`.
+- В настройках кнопка «Войти через Яндекс» запрашивает код устройства и открывает страницу Яндекса. Пароль в игру не вводится. После подтверждения токен пишется в `config/redio/token.txt`.
 - «Выйти» останавливает звук, очищает списки и удаляет этот файл. Переменная `YANDEX_MUSIC_TOKEN` остаётся, если она задана.
 - Запасной вход: вставить адрес страницы с `access_token`. В статус и сообщения об ошибках токен не попадает.
 

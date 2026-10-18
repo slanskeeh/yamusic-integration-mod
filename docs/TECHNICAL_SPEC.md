@@ -7,8 +7,8 @@
 - Minecraft Java Edition 1.20.1
 - Forge 47.4.28
 - Java 17
-- `modid`: `yandexmusic`
-- пакет: `dev.yamod.yandexmusic`
+- `modid`: `redio`
+- пакет: `dev.yamod.redio`
 - версия мода: 0.1.0
 
 ## Что входит в текущую версию
