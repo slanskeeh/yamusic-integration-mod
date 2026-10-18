@@ -3,6 +3,7 @@ package dev.yamod.yandexmusic.client;
 import dev.yamod.yandexmusic.YandexMusicMod;
 import dev.yamod.yandexmusic.client.ui.PlayerStyle;
 import dev.yamod.yandexmusic.client.ui.PrototypeScreen;
+import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
@@ -61,6 +62,14 @@ public final class ClientModEvents {
             }
             while (PrototypeKeyMappings.NEXT.consumeClick()) {
                 NowPlaying.next();
+            }
+            String loginPage = NowPlaying.takeLoginPage();
+            if (loginPage != null) {
+                try {
+                    Util.getPlatform().openUri(java.net.URI.create(loginPage));
+                } catch (RuntimeException exception) {
+                    NowPlaying.explain("Не удалось открыть браузер. Нажмите «Открыть сайт» в настройках плеера.");
+                }
             }
         }
 

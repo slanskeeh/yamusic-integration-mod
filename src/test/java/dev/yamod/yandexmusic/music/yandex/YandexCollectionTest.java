@@ -149,6 +149,54 @@ class YandexCollectionTest {
     }
 
     @Test
+    void deviceCodeRejectsForeignPageAndPendingDoesNotLeakToken() {
+        var login = YandexOAuth.parseCode(200, """
+                {"device_code":"device-code-1","user_code":"abcd-ef","verification_url":"https://oauth.yandex.ru/device","expires_in":600,"interval":5}
+                """);
+        assertEquals("abcd-ef", login.userCode());
+        assertTrue(YandexOAuth.allowedPage(login.page()));
+        assertThrows(MusicException.class, () -> YandexOAuth.parseCode(200, """
+                {"device_code":"device-code-1","user_code":"abcd","verification_url":"https://evil.example/device"}
+                """));
+        assertTrue(YandexOAuth.parseToken(400, "{\"error\":\"authorization_pending\"}").isEmpty());
+        MusicException denied = assertThrows(MusicException.class, () -> YandexOAuth.parseToken(
+                400,
+                "{\"error\":\"access_denied\",\"access_token\":\"super-secret-token-value-123\"}"
+        ));
+        assertFalse(denied.getMessage().contains("super-secret"));
+        assertEquals(
+                "token-value-1234567890",
+                YandexOAuth.parseToken(200, "{\"access_token\":\"token-value-1234567890\",\"token_type\":\"bearer\"}").orElseThrow()
+        );
+    }
+
+    @Test
+    void devicePollDoesNotSendTheMusicToken() {
+        AtomicReference<HttpRequestData> seen = new AtomicReference<>();
+        YandexOAuth oauth = new YandexOAuth(new HttpTransport() {
+            @Override
+            public HttpResponseData exchange(HttpRequestData request) {
+                seen.set(request);
+                return new HttpResponseData(400, "{\"error\":\"authorization_pending\"}");
+            }
+
+            @Override
+            public byte[] getBytes(String url) {
+                return new byte[0];
+            }
+
+            @Override
+            public InputStream openStream(String url) {
+                return InputStream.nullInputStream();
+            }
+        });
+        assertTrue(oauth.poll("device-code-1").isEmpty());
+        assertEquals("https://oauth.yandex.ru/token", seen.get().url());
+        assertTrue(seen.get().body().contains("grant_type=device_code"));
+        assertFalse(seen.get().headers().containsKey("Authorization"));
+    }
+
+    @Test
     void likeAndWaveUseTheDocumentedPaths() {
         AtomicReference<HttpRequestData> seen = new AtomicReference<>();
         YandexApiClient client = new YandexApiClient(new FakeTransport(seen), TOKEN);

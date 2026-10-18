@@ -10,6 +10,7 @@ import dev.yamod.yandexmusic.music.PlaybackTime;
 import dev.yamod.yandexmusic.music.RepeatMode;
 import dev.yamod.yandexmusic.music.model.CatalogRef;
 import dev.yamod.yandexmusic.music.model.TrackMetadata;
+import dev.yamod.yandexmusic.music.yandex.YandexOAuth;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -35,6 +36,8 @@ public final class PrototypeScreen extends Screen {
     private final List<Hit> hits = new ArrayList<>();
     private final int[] scrolls = new int[Section.values().length];
     private EditBox search;
+    private EditBox tokenBox;
+    private int tokenFieldY = -1;
     private Frame frame;
     private boolean draggingSeek;
     private boolean draggingVolume;
@@ -53,9 +56,16 @@ public final class PrototypeScreen extends Screen {
         search.setResponder(LibraryView::query);
         search.setSuggestion(PlayerStyle.text("Поиск", "Search"));
         addRenderableWidget(search);
+        tokenBox = new EditBox(this.font, 0, 0, 120, 14, Component.literal("token"));
+        tokenBox.setMaxLength(2048);
+        tokenBox.setBordered(true);
+        tokenBox.setTextColor(0xFFF5F5F5);
+        tokenBox.setSuggestion("access_token");
         if (!likesRequested) {
             likesRequested = true;
-            NowPlaying.showLikes();
+            if (NowPlaying.signedIn()) {
+                NowPlaying.showLikes();
+            }
         }
     }
 
@@ -83,6 +93,10 @@ public final class PrototypeScreen extends Screen {
         super.render(graphics, mouseX, mouseY, partialTick);
         if (settingsOpen) {
             drawSettings(graphics, mouseX, mouseY);
+            if (tokenFieldY >= 0 && tokenBox != null) {
+                placeTokenBox();
+                tokenBox.render(graphics, mouseX, mouseY, partialTick);
+            }
         }
     }
 
@@ -94,7 +108,20 @@ public final class PrototypeScreen extends Screen {
         Hit settingsHit = find("settings");
         if (settingsHit != null && settingsHit.contains(mouseX, mouseY)) {
             settingsOpen = !settingsOpen;
+            if (!settingsOpen && tokenBox != null) {
+                tokenBox.setFocused(false);
+            }
             return true;
+        }
+        if (settingsOpen && tokenBox != null && tokenFieldY >= 0) {
+            placeTokenBox();
+            if (tokenBox.isMouseOver(mouseX, mouseY)) {
+                search.setFocused(false);
+                tokenBox.setFocused(true);
+                tokenBox.mouseClicked(mouseX, mouseY, button);
+                return true;
+            }
+            tokenBox.setFocused(false);
         }
         if (settingsOpen && inside(frame.settingsX, frame.settingsY, frame.settingsW, frame.settingsH, mouseX, mouseY)) {
             handleSettings(mouseX, mouseY);
@@ -102,6 +129,9 @@ public final class PrototypeScreen extends Screen {
         }
         if (settingsOpen) {
             settingsOpen = false;
+            if (tokenBox != null) {
+                tokenBox.setFocused(false);
+            }
         }
         Hit hit = findAt(mouseX, mouseY);
         if (hit == null) {
@@ -159,6 +189,17 @@ public final class PrototypeScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (settingsOpen && tokenBox != null && tokenBox.isFocused()) {
+            if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
+                submitToken();
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+                tokenBox.setFocused(false);
+                return true;
+            }
+            return tokenBox.keyPressed(keyCode, scanCode, modifiers);
+        }
         if (search != null && search.isFocused() && (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER)) {
             runSearch();
             return true;
@@ -178,6 +219,22 @@ public final class PrototypeScreen extends Screen {
             }
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
+    public boolean charTyped(char codePoint, int modifiers) {
+        if (settingsOpen && tokenBox != null && tokenBox.isFocused()) {
+            return tokenBox.charTyped(codePoint, modifiers);
+        }
+        return super.charTyped(codePoint, modifiers);
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (settingsOpen && tokenBox != null) {
+            tokenBox.tick();
+        }
     }
 
     @Override
@@ -254,6 +311,12 @@ public final class PrototypeScreen extends Screen {
             case "lang-ru" -> PlayerStyle.english(false);
             case "theme-light" -> PlayerStyle.theme(PlayerStyle.Theme.LIGHT);
             case "theme-dark" -> PlayerStyle.theme(PlayerStyle.Theme.DARK);
+            case "begin-login" -> NowPlaying.beginSignIn();
+            case "cancel-login" -> NowPlaying.cancelSignIn();
+            case "open-login" -> openLogin(NowPlaying.loginPage());
+            case "copy-code" -> copyLoginCode();
+            case "sign-out" -> NowPlaying.signOut();
+            case "save-token" -> submitToken();
             default -> {
                 if (hit.id.startsWith("accent:")) {
                     int index = number(hit.id);
@@ -262,6 +325,28 @@ public final class PrototypeScreen extends Screen {
                     }
                 }
             }
+        }
+    }
+
+    private void submitToken() {
+        if (tokenBox == null) {
+            return;
+        }
+        String value = tokenBox.getValue();
+        tokenBox.setValue("");
+        tokenBox.setFocused(false);
+        NowPlaying.signIn(value);
+    }
+
+    private void openLogin(String page) {
+        if (!YandexOAuth.allowedPage(page)) {
+            NowPlaying.explain("Страница входа ещё не готова.");
+            return;
+        }
+        try {
+            net.minecraft.Util.getPlatform().openUri(java.net.URI.create(page));
+        } catch (RuntimeException exception) {
+            NowPlaying.explain("Не удалось открыть браузер. Код можно ввести на сайте Яндекса.");
         }
     }
 
@@ -278,7 +363,8 @@ public final class PrototypeScreen extends Screen {
         int cy = frame.y + 16;
         disc(graphics, cx, cy, 6, 0xFFFFCC00);
         graphics.fill(cx - 1, cy - 2, cx + 1, cy + 3, 0xFFE10600);
-        graphics.drawString(this.font, "Yandex Music", frame.x + 26, frame.y + 12, PlayerStyle.ink());
+        drawPlain(graphics, "Yandex Music", frame.x + 26, frame.y + 8, PlayerStyle.ink());
+        drawPlain(graphics, fit(NowPlaying.accountLabel(), frame.side - 32), frame.x + 26, frame.y + 18, PlayerStyle.muted());
     }
 
     private void drawNav(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -287,7 +373,7 @@ public final class PrototypeScreen extends Screen {
         y = nav(graphics, mouseX, mouseY, y, "wave", Section.WAVE, PlayerStyle.text("Моя волна", "My wave"), Icon.WAVE);
         y = nav(graphics, mouseX, mouseY, y, "collection", Section.COLLECTION, PlayerStyle.text("Моя коллекция", "Collection"), Icon.STACK);
         y += 8;
-        graphics.drawString(this.font, PlayerStyle.text("Плейлисты", "Playlists"), frame.x + 12, y, PlayerStyle.muted());
+        drawPlain(graphics, PlayerStyle.text("Плейлисты", "Playlists"), frame.x + 12, y, PlayerStyle.muted());
         hit(frame.x + 8, y - 2, frame.side - 16, 12, "folders");
         y += 14;
         if (foldersOpen) {
@@ -316,7 +402,7 @@ public final class PrototypeScreen extends Screen {
         }
         int color = selected ? 0xFFFFFF : PlayerStyle.ink();
         icon(graphics, icon, x + 3, y - 1, color);
-        graphics.drawString(this.font, fit(label, w - 18), x + 14, y, color);
+        drawPlain(graphics, fit(label, w - 18), x + 14, y, color);
         hit(x, y - 3, w, 14, id);
     }
 
@@ -324,12 +410,12 @@ public final class PrototypeScreen extends Screen {
         graphics.pose().pushPose();
         graphics.pose().scale(1.4F, 1.4F, 1.0F);
         float inv = 1.0F / 1.4F;
-        graphics.drawString(this.font, title(), (int) (frame.contentX * inv), (int) ((frame.contentY + 2) * inv), PlayerStyle.ink());
+        drawPlain(graphics, title(), (int) (frame.contentX * inv), (int) ((frame.contentY + 2) * inv), PlayerStyle.ink());
         graphics.pose().popPose();
         graphics.fill(frame.searchX, frame.searchY, frame.searchX + frame.searchW, frame.searchY + 16, PlayerStyle.field());
         String status = fit(NowPlaying.status(), frame.contentW);
         int color = NowPlaying.playback() == PlaybackState.FAILED ? 0xFFFF6B6B : PlayerStyle.muted();
-        graphics.drawString(this.font, status, frame.contentX, frame.contentY + 18, color);
+        drawPlain(graphics, status, frame.contentX, frame.contentY + 18, color);
     }
 
     private void drawBody(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -366,8 +452,8 @@ public final class PrototypeScreen extends Screen {
         boolean hover = inside(x, y, w, 36, mouseX, mouseY);
         graphics.fill(x, y, x + w, y + 36, hover ? PlayerStyle.cardHover() : PlayerStyle.card());
         graphics.fill(x, y, x + 3, y + 36, PlayerStyle.accent());
-        graphics.drawString(this.font, PlayerStyle.text("Слушать волну", "Play My Wave"), x + 10, y + 8, PlayerStyle.ink());
-        graphics.drawString(this.font, PlayerStyle.text("Персональная подборка", "Personal radio"), x + 10, y + 20, PlayerStyle.muted());
+        drawPlain(graphics, PlayerStyle.text("Слушать волну", "Play My Wave"), x + 10, y + 8, PlayerStyle.ink());
+        drawPlain(graphics, PlayerStyle.text("Персональная подборка", "Personal radio"), x + 10, y + 20, PlayerStyle.muted());
         hit(x, y, w, 36, "play-wave");
     }
 
@@ -384,8 +470,8 @@ public final class PrototypeScreen extends Screen {
         int w = Math.min(260, frame.contentW);
         boolean hover = inside(x, y, w, 36, mouseX, mouseY);
         graphics.fill(x, y, x + w, y + 36, hover ? PlayerStyle.cardHover() : PlayerStyle.card());
-        graphics.drawString(this.font, title, x + 8, y + 8, PlayerStyle.ink());
-        graphics.drawString(this.font, subtitle, x + 8, y + 20, PlayerStyle.muted());
+        drawPlain(graphics, title, x + 8, y + 8, PlayerStyle.ink());
+        drawPlain(graphics, subtitle, x + 8, y + 20, PlayerStyle.muted());
         hit(x, y, w, 36, id);
         return y + 42;
     }
@@ -395,7 +481,7 @@ public final class PrototypeScreen extends Screen {
             String message = section == Section.HOME || section == Section.LIKES
                     ? PlayerStyle.text("Пока нет любимых треков.", "No liked tracks yet.")
                     : PlayerStyle.text("Здесь пока пусто.", "Nothing here yet.");
-            graphics.drawString(this.font, message, frame.contentX, top, PlayerStyle.muted());
+            drawPlain(graphics, message, frame.contentX, top, PlayerStyle.muted());
             return top + 16;
         }
         int gap = 8;
@@ -421,8 +507,8 @@ public final class PrototypeScreen extends Screen {
                 graphics.fill(x - 2, y - 2, x + cardW + 2, y + cardH, PlayerStyle.cardHover());
             }
             drawCover(graphics, track.coverUri(), track.title(), x, y, cardW);
-            graphics.drawString(this.font, fit(track.title(), cardW), x, y + cardW + 3, PlayerStyle.ink());
-            graphics.drawString(this.font, fit(track.artists(), cardW), x, y + cardW + 13, PlayerStyle.muted());
+            drawPlain(graphics, fit(track.title(), cardW), x, y + cardW + 3, PlayerStyle.ink());
+            drawPlain(graphics, fit(track.artists(), cardW), x, y + cardW + 13, PlayerStyle.muted());
             if (y + cardH > frame.gridTop && y < frame.gridBottom) {
                 hit(x, y, cardW, cardH, prefix + i);
             }
@@ -434,7 +520,7 @@ public final class PrototypeScreen extends Screen {
         List<CatalogRef> albums = NowPlaying.albums();
         int top = frame.gridTop;
         if (albums.isEmpty()) {
-            graphics.drawString(this.font, PlayerStyle.text("Пока нет любимых альбомов.", "No liked albums yet."), frame.contentX, top, PlayerStyle.muted());
+            drawPlain(graphics, PlayerStyle.text("Пока нет любимых альбомов.", "No liked albums yet."), frame.contentX, top, PlayerStyle.muted());
             return;
         }
         int gap = 8;
@@ -460,8 +546,8 @@ public final class PrototypeScreen extends Screen {
                 graphics.fill(x - 2, y - 2, x + cardW + 2, y + cardH, PlayerStyle.cardHover());
             }
             drawCover(graphics, album.coverUri(), album.title(), x, y, cardW);
-            graphics.drawString(this.font, fit(album.title(), cardW), x, y + cardW + 3, PlayerStyle.ink());
-            graphics.drawString(this.font, fit(album.subtitle(), cardW), x, y + cardW + 13, PlayerStyle.muted());
+            drawPlain(graphics, fit(album.title(), cardW), x, y + cardW + 3, PlayerStyle.ink());
+            drawPlain(graphics, fit(album.subtitle(), cardW), x, y + cardW + 13, PlayerStyle.muted());
             if (y + cardH > frame.gridTop && y < frame.gridBottom) {
                 hit(x, y, cardW, cardH, "album:" + album.id());
             }
@@ -470,8 +556,8 @@ public final class PrototypeScreen extends Screen {
 
     private void drawRows(GuiGraphics graphics, int mouseX, int mouseY, List<LibraryView.Row> rows, int top) {
         if (rows.isEmpty()) {
-            graphics.drawString(
-                    this.font,
+            drawPlain(
+                    graphics,
                     PlayerStyle.text("Ничего нет. Найдите через поиск сверху.", "Nothing yet. Use the search above."),
                     frame.contentX,
                     top,
@@ -490,7 +576,7 @@ public final class PrototypeScreen extends Screen {
             if (y + 20 >= frame.gridTop && y < frame.gridBottom) {
                 boolean hover = inside(frame.contentX, y, frame.contentW - 4, 20, mouseX, mouseY);
                 graphics.fill(frame.contentX, y, frame.contentX + frame.contentW - 4, y + 20, hover ? PlayerStyle.cardHover() : PlayerStyle.card());
-                graphics.drawString(this.font, fit(row.label(), frame.contentW - 16), frame.contentX + 6, y + 6, PlayerStyle.ink());
+                drawPlain(graphics, fit(row.label(), frame.contentW - 16), frame.contentX + 6, y + 6, PlayerStyle.ink());
                 hit(frame.contentX, y, frame.contentW - 4, 20, "row:" + real);
             }
             y += 22;
@@ -532,11 +618,11 @@ public final class PrototypeScreen extends Screen {
         int cy = y + 8;
         if (track != null) {
             drawCover(graphics, track.coverUri(), track.title(), cx, cy, cover);
-            graphics.drawString(this.font, fit(track.title(), 90), cx + 38, cy + 4, PlayerStyle.ink());
-            graphics.drawString(this.font, fit(track.artists(), 90), cx + 38, cy + 16, PlayerStyle.muted());
+            drawPlain(graphics, fit(track.title(), 90), cx + 38, cy + 4, PlayerStyle.ink());
+            drawPlain(graphics, fit(track.artists(), 90), cx + 38, cy + 16, PlayerStyle.muted());
         } else {
             graphics.fill(cx, cy, cx + cover, cy + cover, PlayerStyle.field());
-            graphics.drawString(this.font, PlayerStyle.text("Ничего не играет", "Nothing playing"), cx + 38, cy + 12, PlayerStyle.muted());
+            drawPlain(graphics, PlayerStyle.text("Ничего не играет", "Nothing playing"), cx + 38, cy + 12, PlayerStyle.muted());
         }
         int starX = frame.x + 148;
         icon(graphics, Icon.STAR, starX, y + 18, NowPlaying.currentLiked() ? PlayerStyle.accent() : PlayerStyle.muted());
@@ -562,8 +648,8 @@ public final class PrototypeScreen extends Screen {
         frame.seekW = Math.min(220, Math.max(80, frame.w / 4));
         frame.seekX = center - frame.seekW / 2;
         frame.seekY = timeY + 3;
-        graphics.drawString(this.font, left, frame.seekX - 28, timeY, PlayerStyle.muted());
-        graphics.drawString(this.font, right, frame.seekX + frame.seekW + 6, timeY, PlayerStyle.muted());
+        drawPlain(graphics, left, frame.seekX - 28, timeY, PlayerStyle.muted());
+        drawPlain(graphics, right, frame.seekX + frame.seekW + 6, timeY, PlayerStyle.muted());
         drawSlider(graphics, frame.seekX, frame.seekY, frame.seekW, shown, 0xFFFFFFFF);
         hit(frame.seekX, frame.seekY - 3, frame.seekW, 8, "seek");
 
@@ -612,22 +698,77 @@ public final class PrototypeScreen extends Screen {
         int y = frame.settingsY;
         int w = frame.settingsW;
         int h = frame.settingsH;
+        tokenFieldY = -1;
         graphics.fill(x - 2, y - 2, x + w + 2, y + h + 2, 0xFF000000);
         graphics.fill(x, y, x + w, y + h, 0xFFC6C6C6);
-        graphics.drawCenteredString(this.font, PlayerStyle.text("Внешний вид", "Appearance"), x + w / 2, y + 6, 0xFF202020);
-        graphics.drawString(this.font, PlayerStyle.text("Язык", "Language"), x + 8, y + 22, 0xFF202020);
-        choice(graphics, mouseX, mouseY, x + 8, y + 34, 70, "English", "lang-en", PlayerStyle.english());
-        choice(graphics, mouseX, mouseY, x + 82, y + 34, 70, "Русский", "lang-ru", !PlayerStyle.english());
-        graphics.drawString(this.font, PlayerStyle.text("Тема", "Theme"), x + 8, y + 58, 0xFF202020);
-        choice(graphics, mouseX, mouseY, x + 8, y + 70, 70, "Light", "theme-light", PlayerStyle.theme() == PlayerStyle.Theme.LIGHT);
-        choice(graphics, mouseX, mouseY, x + 82, y + 70, 70, "Dark", "theme-dark", PlayerStyle.theme() == PlayerStyle.Theme.DARK);
+        drawPlainCenter(graphics, PlayerStyle.text("Аккаунт", "Account"), x + w / 2, y + 6, 0xFF202020);
+        drawPlainCenter(graphics, fit(NowPlaying.accountLabel(), w - 16), x + w / 2, y + 20, 0xFF202020);
+        int cursor = y + 36;
+        if (NowPlaying.signingIn()) {
+            choice(graphics, mouseX, mouseY, x + 8, cursor, w - 16, PlayerStyle.text("Скопировать", "Copy"), "copy-code", false);
+            cursor += 22;
+            choice(graphics, mouseX, mouseY, x + 8, cursor, (w - 24) / 2, PlayerStyle.text("Открыть сайт", "Open site"), "open-login", false);
+            choice(graphics, mouseX, mouseY, x + 16 + (w - 24) / 2, cursor, (w - 24) / 2, PlayerStyle.text("Отмена", "Cancel"), "cancel-login", false);
+            cursor += 20;
+            drawPlain(graphics, PlayerStyle.text("Пароль в игру не вводится.", "The password stays in the browser."), x + 8, cursor, 0xFF202020);
+            cursor += 16;
+        } else if (NowPlaying.signedIn()) {
+            choice(graphics, mouseX, mouseY, x + 8, cursor, w - 16, PlayerStyle.text("Выйти", "Log out"), "sign-out", false);
+            cursor += 22;
+        } else {
+            choice(graphics, mouseX, mouseY, x + 8, cursor, w - 16, PlayerStyle.text("Войти через Яндекс", "Sign in with Yandex"), "begin-login", false);
+            cursor += 22;
+            drawPlain(graphics, PlayerStyle.text("Или вставьте адрес страницы", "Or paste the page address"), x + 8, cursor, 0xFF202020);
+            cursor += 12;
+            tokenFieldY = cursor;
+            cursor += 18;
+            choice(graphics, mouseX, mouseY, x + 8, cursor, w - 16, PlayerStyle.text("Сохранить токен", "Save token"), "save-token", false);
+            cursor += 22;
+        }
+        if (cursor + 108 > y + h) {
+            return;
+        }
+        drawPlainCenter(graphics, PlayerStyle.text("Внешний вид", "Appearance"), x + w / 2, cursor, 0xFF202020);
+        drawPlain(graphics, PlayerStyle.text("Язык", "Language"), x + 8, cursor + 16, 0xFF202020);
+        choice(graphics, mouseX, mouseY, x + 8, cursor + 28, 70, "English", "lang-en", PlayerStyle.english());
+        choice(graphics, mouseX, mouseY, x + 82, cursor + 28, 70, "Русский", "lang-ru", !PlayerStyle.english());
+        drawPlain(graphics, PlayerStyle.text("Тема", "Theme"), x + 8, cursor + 50, 0xFF202020);
+        choice(graphics, mouseX, mouseY, x + 8, cursor + 62, 70, "Light", "theme-light", PlayerStyle.theme() == PlayerStyle.Theme.LIGHT);
+        choice(graphics, mouseX, mouseY, x + 82, cursor + 62, 70, "Dark", "theme-dark", PlayerStyle.theme() == PlayerStyle.Theme.DARK);
         for (int i = 0; i < PlayerStyle.ACCENTS.length; i++) {
             int sx = x + 8 + i * 24;
-            int sy = y + 96;
+            int sy = cursor + 86;
             graphics.fill(sx - 1, sy - 1, sx + 15, sy + 15, PlayerStyle.accent() == PlayerStyle.ACCENTS[i] ? 0xFFFFFFFF : 0xFF202020);
             graphics.fill(sx, sy, sx + 14, sy + 14, PlayerStyle.ACCENTS[i]);
             hit(sx, sy, 14, 14, "accent:" + i);
         }
+    }
+
+    private void copyLoginCode() {
+        String code = NowPlaying.loginCode();
+        if (code.isBlank()) {
+            NowPlaying.explain("Кода для копирования ещё нет.");
+            return;
+        }
+        this.minecraft.keyboardHandler.setClipboard(code);
+        NowPlaying.explain("Код скопирован. Вставьте его на странице Яндекса.");
+    }
+
+    private void drawPlain(GuiGraphics graphics, String value, int x, int y, int color) {
+        graphics.drawString(this.font, value, x, y, color, false);
+    }
+
+    private void drawPlainCenter(GuiGraphics graphics, String value, int x, int y, int color) {
+        drawPlain(graphics, value, x - this.font.width(value) / 2, y, color);
+    }
+
+    private void placeTokenBox() {
+        if (tokenBox == null || frame == null || tokenFieldY < 0) {
+            return;
+        }
+        tokenBox.setX(frame.settingsX + 8);
+        tokenBox.setY(tokenFieldY);
+        tokenBox.setWidth(Math.max(40, frame.settingsW - 16));
     }
 
     private void choice(GuiGraphics graphics, int mouseX, int mouseY, int x, int y, int w, String label, String id, boolean selected) {
@@ -636,7 +777,7 @@ public final class PrototypeScreen extends Screen {
             bg = 0xFF6E6E6E;
         }
         graphics.fill(x, y, x + w, y + 16, bg);
-        graphics.drawCenteredString(this.font, label, x + w / 2, y + 4, 0xFFFFFFFF);
+        drawPlainCenter(graphics, label, x + w / 2, y + 4, 0xFFFFFFFF);
         hit(x, y, w, 16, id);
     }
 
@@ -864,10 +1005,10 @@ public final class PrototypeScreen extends Screen {
             frame.searchW = Math.min(150, Math.max(70, frame.contentW / 3));
             frame.searchX = frame.contentX + frame.contentW - frame.searchW;
             frame.searchY = frame.contentY;
-            frame.settingsW = 168;
-            frame.settingsH = 118;
-            frame.settingsX = frame.x + frame.w - frame.settingsW - 10;
-            frame.settingsY = frame.y + 28;
+            frame.settingsW = 220;
+            frame.settingsH = Math.min(268, Math.max(180, frame.h - 16));
+            frame.settingsX = frame.x + frame.w - frame.settingsW - 8;
+            frame.settingsY = frame.y + 8;
             return frame;
         }
     }

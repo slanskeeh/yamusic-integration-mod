@@ -37,6 +37,49 @@ public final class TokenFiles {
         return Optional.empty();
     }
 
+    /**
+     * Достаёт сам токен из вставленного адреса или строки. Пароль и лишний текст не сохраняются.
+     */
+    public static String extract(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        if (trimmed.startsWith("\uFEFF")) {
+            trimmed = trimmed.substring(1).trim();
+        }
+        int marker = lower(trimmed).indexOf("access_token=");
+        if (marker >= 0) {
+            String tail = trimmed.substring(marker + "access_token=".length());
+            int cut = tail.length();
+            for (int i = 0; i < tail.length(); i++) {
+                char ch = tail.charAt(i);
+                if (ch == '&' || ch == '#' || ch == ' ' || ch == '"' || ch == '\'') {
+                    cut = i;
+                    break;
+                }
+            }
+            trimmed = tail.substring(0, cut).trim();
+        }
+        if (trimmed.regionMatches(true, 0, "OAuth ", 0, 6)) {
+            trimmed = trimmed.substring(6).trim();
+        }
+        if (trimmed.length() < 20 || trimmed.length() > 2000) {
+            return null;
+        }
+        for (int i = 0; i < trimmed.length(); i++) {
+            char ch = trimmed.charAt(i);
+            if (ch <= 32 || ch > 126) {
+                return null;
+            }
+        }
+        return trimmed;
+    }
+
+    private static String lower(String value) {
+        return value.toLowerCase(java.util.Locale.ROOT);
+    }
+
     private static String normalize(String value) {
         if (value == null) {
             return null;

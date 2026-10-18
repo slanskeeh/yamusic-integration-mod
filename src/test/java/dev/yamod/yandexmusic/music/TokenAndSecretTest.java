@@ -35,6 +35,17 @@ class TokenAndSecretTest {
     }
 
     @Test
+    void pastedAddressKeepsOnlyTheToken() {
+        assertEquals(
+                "abc123abc123abc123abc",
+                TokenFiles.extract("https://music.yandex.ru/#access_token=abc123abc123abc123abc&token_type=bearer")
+        );
+        assertEquals("abc123abc123abc123abc", TokenFiles.extract("OAuth abc123abc123abc123abc"));
+        assertEquals(null, TokenFiles.extract("short"));
+        assertEquals(null, TokenFiles.extract("пароль-вместо-токена-сюда-нельзя"));
+    }
+
+    @Test
     void secretIsRemovedFromText() {
         assertEquals("Ошибка <redacted> при входе", Secrets.redact("Ошибка secret-token при входе", "secret-token"));
     }

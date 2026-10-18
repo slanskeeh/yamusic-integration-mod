@@ -5,12 +5,16 @@ import dev.yamod.yandexmusic.music.MusicException;
 import dev.yamod.yandexmusic.music.PlaybackTime;
 import dev.yamod.yandexmusic.music.PlayerQueue;
 import dev.yamod.yandexmusic.music.RepeatMode;
+import dev.yamod.yandexmusic.music.model.AccountSnapshot;
 import dev.yamod.yandexmusic.music.model.CatalogRef;
 import dev.yamod.yandexmusic.music.model.SearchPage;
 import dev.yamod.yandexmusic.music.model.TrackMetadata;
 import dev.yamod.yandexmusic.music.model.WavePage;
+import dev.yamod.yandexmusic.music.yandex.JavaHttpTransport;
 import dev.yamod.yandexmusic.music.yandex.YandexMusicProvider;
+import dev.yamod.yandexmusic.music.yandex.YandexOAuth;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,6 +46,12 @@ public final class NowPlaying {
     private static final AtomicBoolean busy = new AtomicBoolean();
     private static volatile boolean endHandled;
     private static volatile boolean userStop;
+    private static volatile String accountName = "";
+    private static volatile int tokenState;
+    private static volatile String loginCode = "";
+    private static volatile String loginPage = "";
+    private static volatile String pendingLoginPage = "";
+    private static volatile boolean cancelSignIn;
 
     private NowPlaying() {
     }
@@ -282,9 +292,165 @@ public final class NowPlaying {
         });
     }
 
+    public static String accountLabel() {
+        if (!loginCode.isEmpty()) {
+            return loginCode;
+        }
+        if (!accountName.isEmpty()) {
+            return accountName;
+        }
+        return signedIn() ? "Аккаунт сохранён" : "Вход не выполнен";
+    }
+
+    public static boolean signedIn() {
+        if (tokenState == 0) {
+            try {
+                tokenState = ClientTokenStore.readToken().isPresent() ? 2 : 1;
+            } catch (IOException exception) {
+                tokenState = 1;
+            }
+        }
+        return tokenState == 2;
+    }
+
+    public static boolean signingIn() {
+        return !loginCode.isEmpty();
+    }
+
+    public static String loginCode() {
+        return loginCode;
+    }
+
+    public static String loginPage() {
+        return loginPage;
+    }
+
+    public static String takeLoginPage() {
+        String page = pendingLoginPage;
+        pendingLoginPage = "";
+        return page == null || page.isBlank() ? null : page;
+    }
+
+    public static void explain(String message) {
+        if (message != null && !message.isBlank()) {
+            status = message;
+        }
+    }
+
+    public static void beginSignIn() {
+        cancelSignIn = false;
+        run("Вход", () -> {
+            try {
+                YandexOAuth oauth = new YandexOAuth(new JavaHttpTransport());
+                YandexOAuth.DeviceLogin code = oauth.requestCode();
+                if (cancelSignIn) {
+                    return null;
+                }
+                loginCode = code.userCode();
+                loginPage = code.page();
+                pendingLoginPage = code.page();
+                status = "Код " + code.userCode() + ". Подтвердите его на странице Яндекса. Пароль в игру не вводится.";
+                long deadline = System.currentTimeMillis() + code.expiresInSeconds() * 1000L;
+                Optional<String> access = Optional.empty();
+                while (access.isEmpty()) {
+                    if (cancelSignIn) {
+                        return null;
+                    }
+                    if (System.currentTimeMillis() >= deadline) {
+                        throw new MusicException("Код входа истёк. Начните ещё раз.");
+                    }
+                    access = oauth.poll(code.deviceCode());
+                    if (access.isEmpty()) {
+                        pauseUntil(code.intervalSeconds());
+                    }
+                }
+                if (cancelSignIn) {
+                    return null;
+                }
+                AccountSnapshot account = YandexMusicProvider.create(access.get()).account();
+                if (cancelSignIn) {
+                    return null;
+                }
+                try {
+                    ClientTokenStore.save(access.get());
+                } catch (IOException exception) {
+                    throw new MusicException("Не удалось сохранить токен в папке настроек.");
+                }
+                tokenState = 2;
+                accountName = account.displayName();
+                return "Вход выполнен: " + account.displayName() + ".";
+            } finally {
+                loginCode = "";
+                loginPage = "";
+                pendingLoginPage = "";
+            }
+        });
+    }
+
+    public static void cancelSignIn() {
+        cancelSignIn = true;
+        loginCode = "";
+        loginPage = "";
+        pendingLoginPage = "";
+        status = "Вход отменён.";
+    }
+
+    public static void signIn(String pasted) {
+        String token = dev.yamod.yandexmusic.music.TokenFiles.extract(pasted);
+        if (token == null) {
+            status = "Не вижу токен. Вставьте адрес страницы после входа или сам токен.";
+            return;
+        }
+        run("Вход", () -> {
+            AccountSnapshot account = YandexMusicProvider.create(token).account();
+            try {
+                ClientTokenStore.save(token);
+            } catch (IOException exception) {
+                throw new MusicException("Не удалось сохранить токен в папке настроек.");
+            }
+            tokenState = 2;
+            accountName = account.displayName();
+            return "Вход выполнен: " + account.displayName() + ".";
+        });
+    }
+
+    public static void signOut() {
+        cancelSignIn = true;
+        loginCode = "";
+        loginPage = "";
+        pendingLoginPage = "";
+        stop();
+        likes = List.of();
+        listed = List.of();
+        waveTracks = List.of();
+        albums = List.of();
+        openedAlbum = List.of();
+        albumOpen = false;
+        likedIds.clear();
+        queue = PlayerQueue.empty();
+        accountName = "";
+        LibraryView.show("Аккаунт", List.of());
+        try {
+            ClientTokenStore.clearFile();
+        } catch (IOException exception) {
+            status = "Не удалось удалить файл токена.";
+            return;
+        }
+        if (ClientTokenStore.environmentSuppliesToken()) {
+            tokenState = 2;
+            status = "Файл токена удалён. Переменная YANDEX_MUSIC_TOKEN всё ещё выполняет вход. Уберите её и перезапустите игру.";
+            return;
+        }
+        tokenState = 1;
+        status = "Вы вышли из аккаунта. Сохранённый токен удалён.";
+    }
+
     public static void showLikes() {
         run("Любимые", () -> {
-            List<TrackMetadata> tracks = provider().likedTracks();
+            YandexMusicProvider music = provider();
+            accountName = music.account().displayName();
+            tokenState = 2;
+            List<TrackMetadata> tracks = music.likedTracks();
             likes = List.copyOf(tracks);
             listed = likes;
             likedIds.clear();
@@ -622,6 +788,15 @@ public final class NowPlaying {
         return value.substring(0, 45) + "...";
     }
 
+    private static void pauseUntil(int seconds) throws InterruptedException {
+        for (int i = 0; i < seconds; i++) {
+            if (cancelSignIn) {
+                return;
+            }
+            Thread.sleep(1000L);
+        }
+    }
+
     private static void run(String label, Task task) {
         if (!busy.compareAndSet(false, true)) {
             status = "Предыдущий запрос ещё выполняется.";
@@ -630,7 +805,10 @@ public final class NowPlaying {
         status = label + "...";
         ClientBackground.run(() -> {
             try {
-                status = task.run();
+                String result = task.run();
+                if (result != null) {
+                    status = result;
+                }
             } catch (Exception exception) {
                 status = messageOf(exception);
             } finally {
